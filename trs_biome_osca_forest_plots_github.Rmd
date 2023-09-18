@@ -1,0 +1,286 @@
+---
+title: 'TRS-BIOME: Forest plots from OSCA'
+author: "Svetlina Vasileva"
+date: "`r Sys.Date()`"
+output:
+  epuRate::UQ:
+    toc: yes
+    number_sections: no
+    code_folding: hide
+linkedin: Svetlina Vasileva
+twitter: sunsvet23
+mail: s.vasileva@uq.edu.au
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dev = "pdf", #will save graphs in pdf
+                      dpi = 300,
+                      warning = FALSE,
+                      echo=FALSE,
+                      message = TRUE, 
+                      cache = TRUE,
+                      fig.show='hold') #saves output
+```
+
+# Packages and file
+
+```{r packages and cleaning,message = FALSE}
+library(gridExtra)
+library(ggplot2)
+library(dplyr)
+library(scales)
+
+rm(list = ls())
+setwd("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data")
+
+# Data
+main <- read.csv("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/OSCA/trs_biome_osca_all_traits_adj.csv", header = T, as.is = T)
+sensitivity <- read.csv("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/OSCA/trs_biome_osca_sensitivity.csv", header = T, as.is = T)
+
+```
+
+
+# Adjusting colours and names
+
+```{r}
+# Extracting hex color codes from default color pallette
+#display ggplot2 default hex color codes from 1 to 9
+ for(i in 1:11){
+   print(hue_pal()(i))
+ }
+
+# Generate only for the ones needed
+color_com_rare <- c("#F8766D", "#DB8E00")
+color_taxa <- c("#F8766D", "#A3A500", "#39B600", "#00BF7D")
+color_func <- c("#00BFC4", "#00B0F6", "#9590FF", "#E76BF3", "#FF62BC")
+color_Microba <-c("#FF62BC", "#FF63B6") # for common and rare
+color_9 <- c("#F8766D", "#A3A500", "#39B600", "#00BF7D", "#00BFC4", "#00B0F6", "#9590FF", "#E76BF3", "#FF62BC")
+
+new_labels_levels <-c(
+  "species_common" = "Species_common", 
+  "species_rm0_rare" = "Species_rare", 
+  "genus_common" = "Genus_common",
+  "family_common" = "Family_common", 
+  "EClevel3_common" = "Enzyme(ECL3)_common", 
+  "EClevel4_common" = "Enzyme(ECL4)_common", 
+  "MetaCycpathway_common" = "Pathway(MetaCyc)_common", 
+  "TCDB_common" = "Transporter(TCDB)_common",
+  "Microba_common" = "Genes(Microba)_common")
+
+new_labels_traits <- c(
+    "nc_scz" = "SCZ diagnosis",
+    "aap_clz" = "Treatment resistance",
+    "cr_cnr" = "Clozapine response", 
+    "age" = "Age",
+    "sex" = "Sex",
+    "bmi_cat" = "BMI category",
+    "ipaq_pacat" = "IPAQ category",
+    "bristol_6" = "Stool type",
+    "arfs" = "ARFS",
+    "dietPC1" = "Dietary PC1",
+    "dietPC2" = "Dietary PC2",
+    "dietPC3" = "Dietary PC3",
+    "dietPC4" = "Dietary PC4",  
+    "total_bnf_int" = "BNF dose factor",
+    "mets_5_notes" = "Metabolic Syndrome",
+    "metformin" = "Metformin",
+    "laxatives" = "Laxatives",
+    "cloz_cd_ratio_int" = "Clozapine C/D ratio",
+    "ppi" = "PPI",
+    "sagis_constipation_only" = "Constipation")
+
+```
+
+# Main traits (20 plots)
+
+-   three different sample sizes here
+-   adjust p-values with FDR (n=20, for each of the traits)
+
+```{r}
+
+# Extract data
+all_traits <- main %>% 
+  mutate(sample = factor(sample, levels = c("whole_sample", "scz_only", "clz_only", "clz_only_46")), 
+         trait = factor(trait, levels = c("nc_scz", "aap_clz", "cr_cnr", "total_bnf_int", "cloz_cd_ratio_int", "mets_5_notes", "sagis_constipation_only", "metformin", "laxatives", "ppi", "age", "sex", "bmi_cat", "ipaq_pacat","bristol_6", "arfs", "dietPC1", "dietPC2", "dietPC3", "dietPC4")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common","Microba_common")),
+         covs=factor(covs, levels = c("sex_age_dietPC_bmi_bristol_ipaq", "sex_age_mets_5_notes_participant_group","sex_participant_group_age_dietPC","sex_participant_group_age", "sex_participant_group", "age_participant_group", "no_covs")),
+         covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs")))
+
+```
+
+## Plots
+
+### All levels: not adjusted
+
+```{r}
+
+ggplot(all_traits, aes(y = level, x = pe, group=covs_dummy, color=sig_color, label=pe)) +
+  geom_vline(xintercept = 0, color = "dark grey", cex = 1, alpha = 0.8) +
+  facet_wrap(~trait, nrow=4, labeller = labeller(trait=new_labels_traits)) +
+  scale_y_discrete(limits=rev(levels(all_traits$level)), labels = new_labels_levels) +
+  scale_color_manual(values=color_9,
+                     limits=(levels(all_traits$level)),
+                     labels=new_labels_levels) +
+  geom_point(aes(shape = covs_dummy), size = 2, position=position_dodge(.6)) +
+  geom_errorbarh(aes(xmin = pe-(pe_se), xmax = pe+(pe_se)), height = 0.25,position=position_dodge(0.6), width=0.1) +
+  scale_shape_manual(values = c(1, 16), 
+                     limits=rev(levels(all_traits$covs_dummy)), 
+                     labels=c("No", "Yes"), 
+                     guide = guide_legend(reverse = FALSE)) +
+  scale_x_continuous(limits = c(-10, 119),oob=scales::oob_keep, labels = label_number(accuracy=1), breaks = c(0, 25, 50, 75, 100)) + # keeps the parts of error bars which are within the margins
+  xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+  ylab("Data level") +
+  ggtitle("OREML: Variance Component Analysis") +
+  labs(shape= "Covariates", color = "Microbiome Measure (if q-value<0.05)") +
+  theme(plot.title = element_text(size=20, face="bold", hjust=0.5),
+        legend.text=element_text(size = 30)) +
+  geom_text(aes(label=ifelse(covs_dummy=="yes_covs",as.character(round(pe, digits = 0)),'')), hjust=0.6, vjust=1.5, size=2, position=position_dodge(.5)) +
+  theme_light()
+#ggsave("trs_plots/OSCA_plots/forest_plot_all_traits_all_levels_not_adj.pdf", width = 11, height = 11, dpi=600)
+
+```
+
+### All levels: FDR adjusted
+
+```{r}
+
+ggplot(all_traits, aes(y = level, x = pe, group=covs_dummy, color=sig_color_adj, label=pe)) +
+  geom_vline(xintercept = 0, color = "dark grey", cex = 1, alpha = 0.8) +
+  facet_wrap(~trait, nrow=4, labeller = labeller(trait=new_labels_traits)) +
+  scale_y_discrete(limits=rev(levels(all_traits$level)), labels = new_labels_levels) +
+  scale_color_manual(values=color_9,
+                     limits=(levels(all_traits$level)),
+                     labels=new_labels_levels) +
+  geom_point(aes(shape = covs_dummy), size = 2, position=position_dodge(.6)) +
+  geom_errorbarh(aes(xmin = pe-(pe_se), xmax = pe+(pe_se)), height = 0.25,position=position_dodge(0.6), width=0.1) +
+  scale_shape_manual(values = c(1, 16), 
+                     limits=rev(levels(all_traits$covs_dummy)), 
+                     labels=c("No", "Yes"), 
+                     guide = guide_legend(reverse = FALSE)) +
+  scale_x_continuous(limits = c(-10, 119),oob=scales::oob_keep, labels = label_number(accuracy=1), breaks = c(0, 25, 50, 75, 100)) + # keeps the parts of error bars which are within the margins
+  xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+  ylab("Data level") +
+  ggtitle("OREML: Variance Component Analysis") +
+  labs(shape= "Covariates", color = "Microbiome Measure (if q-value<0.05)") +
+  theme(plot.title = element_text(size=20, face="bold", hjust=0.5),
+        legend.text=element_text(size = 30)) +
+  geom_text(aes(label=ifelse(covs_dummy=="yes_covs",as.character(round(pe, digits = 0)),'')), hjust=0.6, vjust=1.5, size=2, position=position_dodge(.5)) +
+  #guides(color="none") + # remove legend for trait (color)  
+  theme_light()
+#ggsave("trs_plots/OSCA_plots/forest_plot_all_traits_all_levels_sig_adj.pdf", width = 11, height = 11, dpi=600)
+
+```
+
+# Sensitivity analyses
+
+## Data
+
+```{r}
+
+traits_5<- sensitivity %>%
+  filter(trait %in% c("nc_aap", "nc_clz", "cr_cnr", "aap_clz"),
+         covs %in% c("no_covs","sex_age_dietPC_bmi_bristol_ipaq", "sex_age_dietPC_bmi_bristol_ipaq_constipation", "sex_age_dietPC_bmi_bristol_ipaq_metformin", "sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives")) %>%
+  mutate(covs = factor(covs, levels = rev(c("no_covs","sex_age_dietPC_bmi_bristol_ipaq", "sex_age_dietPC_bmi_bristol_ipaq_constipation", "sex_age_dietPC_bmi_bristol_ipaq_metformin", "sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives"))),
+         trait = factor(trait, levels = c("nc_aap", "nc_clz", "cr_cnr", "aap_clz", "duration_illness", "panss_total")),
+         sample = factor(sample, levels = c("nc_aap_only", "no_aap_only", "scz_only", "scz_mets_only", "clz_only")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common","Microba_common")),
+         covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs")))
+
+# PANSS and illness duration
+traits_3<- sensitivity %>%
+  filter(trait %in% c("duration_illness", "duration_first_treatment", "panss_total"),
+         covs %in% c("no_covs", "sex_age_dietPC", "sex_age_dietPC_bmi_bristol_ipaq")) %>%
+  mutate(covs = factor(covs, levels = rev(c("no_covs", "sex_age_dietPC", "sex_age_dietPC_bmi_bristol_ipaq"))),
+         trait = factor(trait, levels = c("duration_illness", "duration_first_treatment", "panss_total")),
+         level = factor(level, levels = c("species_common", "species_rm0_rare", "genus_common", "family_common", "EClevel3_common", "EClevel4_common", "MetaCycpathway_common", "TCDB_common","Microba_common")),
+         covs_dummy = factor(covs_dummy, levels=c("yes_covs", "no_covs")))
+
+```
+
+## 5 plots - for supp Figure 3.1
+
+```{r 5 plots, message=FALSE}
+
+# Sensitivity
+ggplot(traits_5, aes(y = level, x = pe, group=covs, color=sig_color, label=pe)) +
+  geom_vline(xintercept = 0, color = "grey", cex = 1, alpha = 0.8) +
+  facet_wrap(~sample, nrow=1, labeller = labeller (sample =
+                                                    c("nc_aap_only" = "Schizophrenia (NC-AAP)", 
+                                                      "no_aap_only" = "Schizophrenia (NC-TRS)",
+                                                      "scz_only" = "Treatment resistance (AAP-TRS)",
+                                                      "scz_mets_only" = "Treatment resistance (MetS only)",
+                                                      "clz_only" = "Clozapine response (CR-CNR)"))) +
+  scale_y_discrete(limits=rev(levels(traits_5$level)), labels = new_labels_levels)  +
+  scale_color_manual(values=color_9,
+                     limits=(levels(traits_5$level)),
+                     labels=new_labels_levels) +
+  geom_point(aes(shape = covs), size = 3, position=position_dodge(.8)) +
+  geom_errorbarh(aes(xmin = pe-(pe_se), xmax = pe+(pe_se)), height = 0.25,position=position_dodge(0.8)) +
+  scale_shape_manual(values = c(1, 16, 13, 0, 9, 7), 
+                     limits=rev(levels(traits_5$covs)), 
+                     labels=c("no_covs","sex_age_dietPC_bmi_bristol_ipaq", "sex_age_dietPC_bmi_bristol_ipaq_constipation", "sex_age_dietPC_bmi_bristol_ipaq_metformin", "sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives "),
+                     guide = guide_legend(reverse = FALSE)) +
+  scale_x_continuous(limits = c(-10,119), oob=scales::oob_keep, labels = label_number(accuracy=1), breaks = c(0, 25, 50, 75, 100)) + 
+  xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+  ylab("Data level") +
+  ggtitle("Sensitivity analyses") +
+  labs(shape= "Covariates") +
+  geom_text(aes(label=ifelse(covs=="sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  geom_text(aes(label=ifelse(covs=="sex_age_dietPC_bmi_bristol_ipaq_constipation",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  geom_text(aes(label=ifelse(sample %in% c("nc_aap_only", "no_aap_only", "scz_mets_only") & covs=="sex_age_dietPC_bmi_bristol_ipaq",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  guides(color="none") + # remove legend for level (color)
+  theme_light() +
+  theme(legend.position="right",legend.text=element_text(size = 6),
+        legend.direction = "vertical", legend.box = "vertical")
+#ggsave("trs_plots/OSCA_plots/forest_plot_main_traits_5_covs_not_adjusted.pdf", height = 5, width = 14, dpi=600)
+
+```
+
+## 3 plots 
+
+```{r 3 plots, message=FALSE}
+
+# Sensitivity
+ggplot(traits_3, aes(y = level, x = pe, group=covs, color=sig_color, label=pe)) +
+  geom_vline(xintercept = 0, color = "grey", cex = 1, alpha = 0.8) +
+  facet_wrap(~trait, nrow=1, labeller = labeller (trait =
+                                                    c("duration_illness" = "Duration illness", 
+                                                      "duration_first_treatment" = "Time since 1st AP treatment",
+                                                      "panss_total" = "PANSS total"))) +
+  scale_y_discrete(limits=rev(levels(traits_3$level)), labels = new_labels_levels)  +
+  scale_color_manual(values=color_9,
+                     limits=(levels(traits_3$level)),
+                     labels=new_labels_levels) +
+  geom_point(aes(shape = covs), size = 3, position=position_dodge(.8)) +
+  geom_errorbarh(aes(xmin = pe-(pe_se), xmax = pe+(pe_se)), height = 0.25,position=position_dodge(0.8)) +
+  scale_shape_manual(values = c(1, 16, 13, 0, 9, 7), 
+                     limits=rev(levels(traits_3$covs)), 
+                     labels=c("no_covs","sex_age_dietPC_bmi_bristol_ipaq", "sex_age_dietPC_bmi_bristol_ipaq_constipation", "sex_age_dietPC_bmi_bristol_ipaq_metformin", "sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives "),
+                     guide = guide_legend(reverse = FALSE)) +
+  scale_x_continuous(limits = c(-10,119), oob=scales::oob_keep, labels = label_number(accuracy=1), breaks = c(0, 25, 50, 75, 100)) + 
+  xlab(expression(paste("% of phenotypic variance explained (b"^2*")"))) +
+  ylab("Data level") +
+  ggtitle("Sensitivity analyses") +
+  labs(shape= "Covariates") +
+  geom_text(aes(label=ifelse(covs=="sex_age_dietPC_bmi_bristol_ipaq_metformin_ppi_laxatives",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  geom_text(aes(label=ifelse(covs=="sex_age_dietPC_bmi_bristol_ipaq_constipation",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  geom_text(aes(label=ifelse(sample %in% c("nc_aap_only", "no_aap_only", "scz_mets_only") & covs=="sex_age_dietPC_bmi_bristol_ipaq",as.character(round(pe, digits = 0)),'')), hjust = 0.5, vjust = 1.5, size = 2.5, position = position_dodge(1)) +
+  guides(color="none") + # remove legend for level (color)
+  theme_light() +
+  theme(legend.position="right",legend.text=element_text(size = 6),
+        legend.direction = "vertical", legend.box = "vertical")
+#ggsave("trs_plots/OSCA_plots/forest_plot_duration_covs_not_adjusted.pdf", height = 5, width = 8, dpi=600)
+
+```
+
+# Extracting all data included in the plots
+
+```{r}
+#write.csv(all_traits_adj, file = "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/OSCA/trs_biome_osca_all_traits_adj.csv", row.names = FALSE )
+#write.csv(sensitivity, file = "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/OSCA/trs_biome_osca_sensitivity.csv", row.names = FALSE )
+
+```
+
