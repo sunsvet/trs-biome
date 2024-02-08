@@ -16,4 +16,4 @@ by Vasileva et al., 2024 (doi:10.1001/jamapsychiatry.2023.5371)
 * trs_biome_metagenomics_analysis_osca_prep.Rmd - extracting data for OSCA analyses
 * trs_biome_osca_forest_plots.Rmd - creating forest plots for OSCA results
 
-*This folder will be updated shortly with complete scripts for analyses and dataframes.*
+*This folder will be updated shortly with complete (and tidier) scripts for analyses and dataframes.*
