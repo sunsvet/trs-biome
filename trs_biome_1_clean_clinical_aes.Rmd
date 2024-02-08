@@ -1,0 +1,1738 @@
+---
+title: "Data cleaning of clinical, SCFA and AES data for TRS-BIOME"
+author: "Svetlina Vasileva"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::UQ:
+    toc: yes
+    number_sections: no
+    code_folding: hide
+  html_document:
+    toc: yes
+    df_print: paged
+linkedin: "Svetlina Vasileva"
+twitter: "sunsvet23"
+mail: "s.vasileva@uq.edu.au"
+---
+
+- https://statsandr.com/blog/anova-in-r/#aim-and-hypotheses-of-anova
+- Checking for normality: https://statsandr.com/blog/do-my-data-follow-a-normal-distribution-a-note-on-the-most-widely-used-distribution-and-how-to-test-for-normality-in-r/#what-is-a-normal-distribution
+
+# 1. Loading packages
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(data.table)
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+library(ggpubr)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(tidyverse)
+library(magrittr) # mutate_at()
+library(purrr) # map()
+library(corrplot)  # correlation plots
+library(caret) # distribution plots for continuous variables
+library(naniar) # replace_with_na_all()
+library(seqinr) # swap()
+library(reshape2) # melt()
+library(ggfortify) # pca, but for this need quantitative data?
+library(polycor) # for polychoric correlation
+library(lattice) # for dotplot
+# install.packages("remotes")
+# remotes::install_github("easystats/report")
+library(report) # for report function to get a report for ANOVA
+library(multcomp) # for posthoc tests - Dunnett
+library(FSA) # for performing post hoc tests for non-parametric data
+library(ggstatsplot) # for adding stat tests results to plots
+library(ggbiplot) # for pca  # devtools::install_github("vqv/ggbiplot")
+library(factoextra) # for pca
+library(compositions) # for clr
+library(car) #  
+library(vegan) # 
+library(lubridate)
+library(gridExtra)
+library(mixOmics)
+library(score) # package for calculating IPAQ score 
+library(table1) # for descriptive summary statistics tables 
+library(arsenal) # for descriptive summary statistics tables 
+library(dplyr) # https://dplyr.tidyverse.org/articles/dplyr.html
+```
+
+# 2. Loading data
+>Loading data clinical data, AES and dates related to fecal sample collection 
+
+```{r}
+rm(list = ls())
+setwd("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data")                                      # set working directory
+aes_trs_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/Original_data/trs_biome_97_aes_raw.csv"               # upload Australian Eating Survey raw data (diet)
+clinical_trs_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/Original_data/trs_biome_clinical_raw_new_metabolic_measures_march_2022.csv"     # upload raw clinical data from RedCap after Andrea got new dates for met bloods 
+dates_trs_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/original_data/trs_biome_97_stool_dates.csv"     # upload file with dates for sample collection and when sample was received which were extracted from sample sheet
+id_code_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/Metagenomics/trs_biome_sample_manifest.csv"    # Microba id manifest
+
+aes_trs<-read.csv(aes_trs_dir, header = T, as.is = T)
+clinical_trs<-read.csv(clinical_trs_dir, header = T)
+dates_trs<-read.csv(dates_trs_dir, header = T, as.is = T)
+id_code<-read.csv(id_code_dir, header = T, as.is = T)
+
+```
+# 3. Data cleaning 
+
+- Participants P077, P078, P080, P084 all live at the Park - similiar diet/accomodaiton!
+
+## 3.1 SCFAs and Sample Weight
+- all SCFAs are in uM calculated for 1gram of stool per 10mL of buffer
+- here I have normalised by weight and then multiplied by 10(mL)/1000(L) to get the values in uM/g sample as in McKay et al 2023, Journal of chromatography B
+
+```{r}
+# Upload files with SCFAs and sample weight
+scfa_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/original_data/trs_biome_scfa_extracted.csv"     # upload file with scfa measures raw
+sample_weight_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/original_data/trs_biome_sample_weight.csv"     # upload file with sample weights
+scfa<-read.csv(scfa_dir, header = T, as.is = T)
+sample_weight<-read.csv(sample_weight_dir, header = T, as.is = T)
+
+# Join files and select relevant columns
+scfa_weight<-inner_join(scfa,sample_weight, by="participant_id")   # join the two files by participant_id
+scfa_weight<-scfa_weight %>% dplyr::select(participant_id, acetate, propionate, butyrate, sample_weight) 
+
+# create new variables with scfa measures based on the weight as MA calculated the concentrations based on 1g per 10mL of Acetonitrile 50%
+scfa_weight$acetate_clean<-(scfa_weight$acetate*10/1000)/scfa_weight$sample_weight  # for acetate
+scfa_weight$propionate_clean<-(scfa_weight$propionate*10/1000)/scfa_weight$sample_weight  # for propionate
+scfa_weight$butyrate_clean<-(scfa_weight$butyrate*10/1000)/scfa_weight$sample_weight  # for butyrate
+
+# Save file into a new variable
+write.csv(scfa_weight, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_scfa_clean.csv", row.names = T, quote = F)
+
+```
+
+## 3.2 AES data
+
+```{r}
+# Renaming participant_id variable
+colnames(aes_trs)[which(colnames(aes_trs) == "Participant_ID")] <- "participant_id"  # rename column
+aes_trs$participant_id <- gsub('T', 'P', aes_trs$participant_id)
+
+# Remove irrelevant columns from AES
+aes_trs <- aes_trs %>% dplyr::select(- DataSet,- Who_completedsurvey, -weight, - height, - Type, - consent, - age, - gender) # remove redundant columns
+
+```
+
+## 3.3 Pruning clinical data to relevant columns
+
+- participant_group, 1-4 where:
+  1 is clozapine responder (CR)
+  2 is clozapine non-responder (CNR)
+  3 is antipsychotic responder (AAP)
+  4 is non-psychiatric control (NC)
+- sex:
+  0 is male
+  1 is female
+- smoking:
+  1 is Never
+  2 is Former 
+  3 is Former, currently on nicotine replacement therapy
+  4 is Current
+- living situation:
+  1 is in-hospital
+  2 is supported
+  3 is independent 
+- Bristol stool chart:
+  1/2 is constipation
+  3/4 is normal
+  5 is lacking fibre
+  6/7 is diarrhea 
+  
+```{r}
+
+# Change record ids from clinical records to P0XX format
+clinical_trs$record_id <- sub('.{8}$', '', clinical_trs$record_id)  # remove the last 8 digits of the record_id and leave only the first 4
+clinical_trs$record_id <- gsub('T', 'P', clinical_trs$record_id) # substitute T for P
+colnames(clinical_trs)[which(colnames(clinical_trs) == "record_id")] <- "participant_id"   # rename column from record_id to participant_id
+
+# Remove participant who refused to give a fecal sample - P056
+clinical_trs<-clinical_trs[!(clinical_trs$participant_id=="P056"),]
+
+# Remove irrelevant columns from clinical data
+clinical_trs <- clinical_trs %>% dplyr::select(- clinician_notes, -redcap_data_access_group,- screening_id, -country_birth_other, - interviewer_code, - consent_dna_saliva, - subset_fresh_faeces, - capacity_consent, - visit_checklist_complete, - clinician_notes_complete, - demographics_complete, -medications_complete, - medical_history_complete, - psychiatric_history_complete, - bristol_stool_form_scale_complete, - physical_examinations_complete, - blood_test_e8eb_complete, - metabolic_investigations_complete, - panss_complete, - cvltii_complete, - ipaq_complete, - dass21_complete, - sofas_complete, - audit_complete, - fagerstrom_complete, - yale_food_addiction_scale_complete, - sagis_complete) # remove irrelevant columns
+
+# Add Microba IDs to the clinical file
+id_code<-id_code%>% dplyr::select(MG_SampleID, participant_id)   # take only relevant columns
+clinical_trs <- plyr::join(id_code,clinical_trs, by = "participant_id", type = "left")
+clinical_trs<-clinical_trs[,c(2,1,3:ncol(clinical_trs))]
+
+# Create a new variable called scz (control vs patient)
+clinical_trs$scz <- NA # Indication for schizophrenia
+clinical_trs$scz <- ifelse(clinical_trs$participant_group < 4, "scz", "nc")
+clinical_trs$scz<-as.factor(clinical_trs$scz)
+
+# Creating a new variable called clz (taking clozapine or not taking clozapine)
+clinical_trs$clz <- NA # Clozapine
+clinical_trs$clz <- ifelse(clinical_trs$participant_group < 3, "clz", "no_clz")
+clinical_trs$clz<-as.factor(clinical_trs$clz)
+
+# Replacing values for Participant groups from numbers to labels
+clinical_trs$participant_group[clinical_trs$participant_group=="1"]<-"CR"
+clinical_trs$participant_group[clinical_trs$participant_group=="2"]<-"CNR"
+clinical_trs$participant_group[clinical_trs$participant_group=="3"]<-"AAP"
+clinical_trs$participant_group[clinical_trs$participant_group=="4"]<-"NC"
+clinical_trs <-as_tibble (clinical_trs)%>% mutate(participant_group = factor(participant_group)) # Turn group from character to factor 
+clinical_trs$participant_group <- factor(clinical_trs$participant_group, levels=c('NC', 'AAP', 'CR', 'CNR'))
+
+# Replacing values for Sex from numbers to labels
+clinical_trs$sex[clinical_trs$sex=="0"]<-"male"
+clinical_trs$sex[clinical_trs$sex=="1"]<-"female"
+
+# Change NAs for living situation for controls to "independent"
+sum(is.na(clinical_trs$living_situation)) # check there are 25 NAs, manual check they are all NCs
+clinical_trs$living_situation[is.na(clinical_trs$living_situation)]=3
+
+# Replacing values for living_situation from numbers to labels
+clinical_trs$living_situation[clinical_trs$living_situation=="1"]<-"in-hospital"
+clinical_trs$living_situation[clinical_trs$living_situation=="2"]<-"supported"
+clinical_trs$living_situation[clinical_trs$living_situation=="3"]<-"independent"
+
+# Replacing values for smoking_status from numbers to labels
+clinical_trs$smoking_status[clinical_trs$smoking_status=="1"]<-"never"
+clinical_trs$smoking_status[clinical_trs$smoking_status=="2"]<-"former"
+clinical_trs$smoking_status[clinical_trs$smoking_status=="3"]<-"former" # former on nicotine replacement therapy
+clinical_trs$smoking_status[clinical_trs$smoking_status=="4"]<-"current"
+
+# Replacing NA values for cigarettes_perday with 0
+clinical_trs$cigarettes_perday[is.na(clinical_trs$cigarettes_perday)]=0
+```
+
+### 3.3.1 Medications
+*Renaming medications* 
+
+```{r}
+#Correcting names
+clinical_trs[ clinical_trs=="Aripirazole" | clinical_trs=="Ariprazole " | clinical_trs=="Aripiprazole" | clinical_trs=="Abilify" | clinical_trs=="Aripiprazole "] <-"Aripiprazole" 
+clinical_trs[clinical_trs=="Amilsulpride"]<-"Amisulpride"
+clinical_trs[clinical_trs=="Cholcaciferol" | clinical_trs=="Cholecalciferol"| clinical_trs=="Vit d " | clinical_trs=="Vit D"]<-"Vitamin D"
+clinical_trs[clinical_trs=="metformin" | clinical_trs=="Metformin " | clinical_trs=="Metformin XR" | clinical_trs=="Metformin XR " | clinical_trs=="Diaformin" | clinical_trs=="Diaformin XR"] <-"Metformin" 
+clinical_trs[clinical_trs=="Metroprolol"]<-"Metoprolol"
+clinical_trs[clinical_trs=="Mirtazepine"]<-"Mirtazapine"
+clinical_trs[clinical_trs=="Coloxyl" | clinical_trs=="Coloxyl & Senna " | clinical_trs=="coloxyl & Senna tablets " | clinical_trs=="Coloxyl &Senna" | clinical_trs=="Coloxyl and senna" | clinical_trs=="Coloxyl and Senna" | clinical_trs=="Coloxyl &  Senna" | clinical_trs=="Coloxyl Senna" | clinical_trs== "Coloxyl/Senna 50/80" | clinical_trs=="Cosenna"] <-"Coloxyl & Senna"
+clinical_trs[clinical_trs=="Soidum valproate" | clinical_trs=="svavet"]<-"Sodium valproate"
+clinical_trs[clinical_trs=="Clozpaine"]<-"Clozapine"
+clinical_trs[clinical_trs=="Hydroxocobalamin"] <-"Vitamin B12" 
+clinical_trs[clinical_trs=="Betabit"] <-"Vitamin B1" 
+clinical_trs[clinical_trs=="Vitamin B complex"]<-"Vitamin B"
+clinical_trs[clinical_trs=="Atenalol"]<-"Atenolol"
+clinical_trs[clinical_trs=="Clopixol"]<-"Zuclopenthixol"
+clinical_trs[clinical_trs=="Clopixol depot"]<-"Zuclopenthixol Depot"
+clinical_trs[clinical_trs=="Atorvastin"]<-"Atorvastatin"
+clinical_trs[clinical_trs=="Atrovent"]<-"Ipratropium bromide"
+clinical_trs[clinical_trs=="Cenovis Multivate" | clinical_trs=="Centrum Women"]<-"Multivitamin"
+clinical_trs[clinical_trs=="Diclofenac"]<-"Voltaren"
+clinical_trs[clinical_trs=="Enlafax XR"]<-"Venlafaxine"
+clinical_trs[clinical_trs=="EsPantoprazole"]<-"Pantoprazole"
+clinical_trs[clinical_trs=="Fish oil "]<-"Fish oil"
+clinical_trs[clinical_trs=="OCP Benda"]<-"Brenda"
+clinical_trs[clinical_trs=="Lorazidone" | clinical_trs=="Lurasidone "]<-"Lurasidone"
+clinical_trs[clinical_trs=="Pregbalin"]<-"Pregabalin"
+clinical_trs[clinical_trs=="Salbutamol"]<-"Ventolin"
+clinical_trs[clinical_trs=="Saphris wafer"]<-"Asenapine wafer"
+clinical_trs[clinical_trs=="Zonegran"]<-"Zonisamide"
+clinical_trs[clinical_trs=="Nexium"]<-"Esomeprazole"
+clinical_trs[clinical_trs=="Abilify Depot"]<-"Aripiprazole Depot"
+clinical_trs[clinical_trs=="APO-Atorvastin"]<-"Atorvastatin"
+
+#Extract medication data
+meds<-clinical_trs%>% dplyr::select(contains('participant'),contains('medication'))
+
+occurances<-table(unlist(meds%>%dplyr::select(contains('medication')))) # get the names of all medications mentioned, check manually and edit names
+#view(occurances) 
+```
+
+*Antipsychotics*
+- TAP: Zuclopenthixol, Flupenthixol
+- AAPs: Olanzapine, Aripiprazole, Risperidone, Lurasidone, Quetiapine, Paliperidone, Asenapine, Amisulpride
+*Metabolic and cardio*
+- betablocker (bloods and cardio): Atenolol, Metoprolol, Propranolol, 
+- Bood and cardio: perindo, Amlodipine, Allopurinol, Clonidine, Lercanidipine, Moxonidine, Perindopril, Ramipril, Rosuvastatin, Telmisartan, 
+- metabolic: metformin/diaformin, Acarbose, Atorvastatin, Desmopressin, Diabex XR, Dulaglutide, Fenofibrate, Ezetimibe, Gliclazide, Lipidil, Minirin, Ozempic, Simvastatin, Zimstat, 
+*Antidepressants*
+- SSRI: Citalopram, Escitalopram, Fluoxetine, Fluvoxamine, Sertraline
+- SNIRs: Venlafaxine, Duloxetine
+- tricyclic/tetracyclic antidepressants: Endep, Mirtazapine
+*Gi*
+- laxatives: Coloxyl & Senna, Senna, Docusate and Senna, Lactulose, Metamucil, Movicol, Nulax, 
+- PPIs: Rabeprazole, Esomeprazole, Pantoprazole
+- other GI-related: Duodart, Gaviscon, Mebeverine
+*Others*
+- anti-inflammatory: Celecoxib, Aspirin, Ibuprofen, Ibuprofen, Meloxicam
+- antichoalinergic: Ipratropium bromide, Atropine, Benzatropine, 
+- anticoagulant: Apixaban, 
+- anticonvulsants: Keppra, Lamotrigine, Pregabalin, 
+- immunesupressive: Azathioprine, 
+- benzodiazepine: Diazepam, Lorazepam, Temazepam, 
+- contraceptive: Depot Provera, Brenda, 
+- alcohol/opioid abuse drug: Naltrexone
+- Methenamine: antibiotic, exlucsion? 
+- Oxybutin: against bedwetting 
+- others: Risedronate Sodium - used against osteoporosis, Roaccutane - acne, Tamoxifen - prevents breast cancer, Thyroxine - thryoid problems, 
+- Seretide MDI, Spiriva, : against asthma
+- Soidum valpraote, Zonisamide: agaisnt epilepsy 
+
+- 1 = Yes, 0 = No; 
+ 
+```{r}
+# Combine all meds in one variable called "all"
+meds<-meds%>%
+  unite("all",medication_1:medication_16, sep=" ", remove=FALSE)
+
+# TAP
+meds$TAP<-0
+meds$TAP[grep("Zuclopenthixol|Flupenthixol",meds$all)]<-"1" # check whether strings are contained in variable "all"
+meds$TAP<-as.numeric(meds$TAP)
+
+# AAP
+meds$AAP<-0
+meds$AAP[grep("Olanzapine|Aripiprazole|Risperidone|Lurasidone|Quetiapine|Paliperidone|Asenapine|Amisulpride",meds$all)]<-"1"
+meds$AAP<-as.numeric(meds$AAP)
+
+# Metformin
+meds$metformin<-0
+meds$metformin[grep("Metformin",meds$all)]<-"1"
+meds$metformin<-as.numeric(meds$metformin)
+
+# Laxatives
+meds$laxatives<-0
+meds$laxatives[grep("Coloxyl|Senna|Docustate|Lactulose|Metamucil|Movicol|Nulax",meds$all)]<-"1"
+meds$laxatives<-as.numeric(meds$laxatives)
+
+# PPIs
+meds$PPI<-0
+meds$PPI[grep("Rabeprazole|Esomeprazole|Pantoprazole",meds$all)]<-"1"
+meds$PPI<-as.numeric(meds$PPI)
+
+# SSRIs
+meds$SSRI<-0
+meds$SSRI[grep("Citalopram|Escitalopram|Fluoxetine|Fluvoxamine|Sertraline",meds$all)]<-"1"
+meds$SSRI<-as.numeric(meds$SSRI)
+
+# SNIRs
+meds$SNIR<-0
+meds$SNIR[grep("Venlafaxine|Duloxetine",meds$all)]<-"1"
+meds$SNIR<-as.numeric(meds$SNIR)
+
+# Other antidepressants
+meds$other_antidepressants<-0
+meds$other_antidepressants[grep("Endep|Mirtazapine",meds$all)]<-"1"
+meds$other_antidepressants<-as.numeric(meds$other_antidepressants)
+
+write.csv(meds, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_meds_clean.csv", row.names = T, quote = F)
+
+# Combine meds table with clinical_trs
+clinical_trs<-right_join(clinical_trs,meds%>%dplyr::select(1,21,22,23,24,25,26,27,28),by="participant_id")
+
+```
+
+### 3.3.2 Chronic conditions
+- nervous_system,	respiratory_system,	cardiovascular_system,	endocrine_system,	gi_system,	genitourinary_system,	musculoskeletal_system,	other_illnesses,	allegies:
+  - 0: nil
+  - 1: past
+  - 2: current
+- sedation,	hypersalivation,	nausea_vomiting,	urinary_incontinence: 
+  - 0: no
+  - 1: yes
+
+#### 3.3.3 Bristol Stool Chart regrouping
+
+```{r}
+# Clean Bristol Chart Scale
+clinical_trs$stool_type[clinical_trs$stool_type=="3 sample collected from toilet bowl"]<-"3"  # remove "sample collected from toilet bowl"
+#regroup BSC data
+clinical_trs$stool_type_regroup <- NA
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type == 1)] <- "1"
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type == 2)] <- "2"
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type == 3)] <- "3"
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type %in% 4:5)] <- "4"
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type == 6)] <- "5"
+clinical_trs$stool_type_regroup[which(clinical_trs$stool_type  == 7)] <- "6"
+clinical_trs$stool_type_regroup <- as.numeric(clinical_trs$stool_type_regroup)
+```
+
+### 3.3.4 SAGIS scoring
+- https://digestivehealth.org.au/wp-content/uploads/2020/09/SAGIS-Instructions.pdf
+
+```{r}
+# Create a total symptom burden score from SAGIS (add scores from Q1 to Q22), score from 0 to 88
+clinical_trs$sagis_total_burden<-NA
+clinical_trs$sagis_total_burden<-clinical_trs$sagis_1+clinical_trs$sagis_2+clinical_trs$sagis_3+clinical_trs$sagis_4+clinical_trs$sagis_5+clinical_trs$sagis_6+clinical_trs$sagis_7+clinical_trs$sagis_8+clinical_trs$sagis_9+clinical_trs$sagis_10+clinical_trs$sagis_11+clinical_trs$sagis_12+clinical_trs$sagis_13+clinical_trs$sagis_14+clinical_trs$sagis_15+clinical_trs$sagis_16+clinical_trs$sagis_17+clinical_trs$sagis_18+clinical_trs$sagis_19+clinical_trs$sagis_20+clinical_trs$sagis_21+clinical_trs$sagis_22
+
+
+# Global Impact score, number of times that are scored with a 3 or a 4 from Q1 to Q22, score from 0 to 22
+#clinical_trs$sagis_global_impact<-NA
+#clinical_trs$sagis_global_impact<-(sagis_1:sagis_22)>2
+
+
+# Epigastric pain score, Q3-Q7, Q16, Q20 are summed together, score from 0 to 28
+# Diarrhea and discomfort score, Q8,Q11-14,Q21 are summed together, score from 0 to 20
+# Reflux, Q1, Q2 and Q22 are summed together, score from 0 to 12
+# Nausea/Vomiting score, Q15, Q17-Q19 are summed together, score from 0 to 16
+# Constipation score, Q9 and Q10 are summed together, score from 0 to 8
+
+clinical_trs<-clinical_trs%>%
+  mutate(sagis_epigastric_pain = sagis_3+sagis_4+sagis_5+sagis_6+sagis_7+sagis_20,
+                      sagis_diarrhea_discomfort = sagis_8+sagis_11+sagis_12+sagis_13+sagis_14+sagis_21,
+                      sagis_reflux = sagis_1+sagis_2+sagis_22,
+                      sagis_nausea = sagis_15+sagis_17+sagis_18+sagis_19,
+                      sagis_constipation = sagis_9+sagis_10)%>%
+  dplyr::select(everything(),sagis_epigastric_pain, sagis_diarrhea_discomfort, sagis_reflux, sagis_nausea, sagis_constipation)
+  sagis_all<-clinical_trs%>% dplyr::select(participant_id, contains("sagis"))
+  
+```
+
+
+### 3.3.5 IPAQ scoring
+- Physical exercise measure
+- Extracted 3 measures: met, kilocalories and category (High, Moderate, Low)
+- https://www.rdocumentation.org/packages/score/versions/1.0.2/topics/ipaq
+- tried using the "score" package, but found an error in the code, so ended up writing my own code for ipaq_category
+
+#### 3.3.5.1 IPAQ prep for score calculations
+```{r}
+# Compile a total physical exercise score from IPAQ
+#ipaq<-clinical_trs[,grepl("ipaq_",names(clinical_trs))] # take columns that contain "ipaq_"  # choose only variables that contain specific string
+
+# Save IPAQ data in a new variable
+ipaq_all<-clinical_trs[,c("participant_id","weight","ipaq_181","ipaq_1112_mins","ipaq_183_days","ipaq_184_mins","ipaq_185_days","ipaq_186_mins","ipaq_187_weekday_mins")] # choose the measures needed to use the score package and save them in a new variable
+
+# Create new columns 
+ipaq_all$VigHours<-0
+ipaq_all$ModHours<-0
+ipaq_all$WalkHours<-0
+ipaq_all$SitHours<-0
+
+# Rename variables with names for "score" package
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_181"] <- "VigDays"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_1112_mins"] <- "VigMin"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_183_days"] <- "ModDays"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_184_mins"] <- "ModMin"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_185_days"] <- "WalkDays"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_186_mins"] <- "WalkMin"
+colnames(ipaq_all)[colnames(ipaq_all) == "ipaq_187_weekday_mins"] <- "SitMin"
+
+# Reorder columns for IPAQ analysis
+col_order<-c("participant_id", "weight","VigDays", "VigHours", "VigMin","ModDays", "ModHours", "ModMin","WalkDays", "WalkHours", "WalkMin","SitHours", "SitMin")
+ipaq_final<-ipaq_all[,col_order]
+
+# Calculate IPAQ met and kilocalories
+ipaq_results<-ipaq_final%>%
+  dplyr::mutate(ipaq_met=3.3*WalkMin*WalkDays+4.0*ModMin*ModDays+8.0*VigMin*VigDays, ipaq_kilocalories=ipaq_met*weight/60)%>%
+  dplyr::select(everything(), ipaq_met, ipaq_kilocalories)
+```
+
+#### 3.3.5.2 IPAQ category
+
+```{r}
+# Moderate  
+ipaq_results[(ipaq_results$VigDays >= 3 & ipaq_results$VigMin >= 20) | (ipaq_results$ModDays+ipaq_results$WalkDays >= 5 & ipaq_results$ModMin+ipaq_results$WalkMin >= 30) | ((ipaq_results$VigDays + ipaq_results$ModDays + ipaq_results$WalkDays)>= 5 & ipaq_results$ipaq_met>= 600), "ipaq_pacat"] <- 'Moderate'
+
+# High 
+ipaq_results[(ipaq_results$VigDays >= 3 & ipaq_results$ipaq_met >= 1500) | (ipaq_results$VigDays + ipaq_results$ModDays + ipaq_results$WalkDays>= 7 & ipaq_results$ipaq_met>= 3000), "ipaq_pacat"] <- 'High'
+
+# Low 
+ipaq_results$ipaq_pacat[is.na(ipaq_results$ipaq_pacat)] <- 'Low'  # everything else is low
+  
+# All mins 
+ipaq_results$excludeMin<-ifelse(ipaq_results$VigMin+ipaq_results$ModMin+ipaq_results$WalkMin>960,1,0) # if all minutes for vigorious, moderate and walking are more 960, then write 1
+
+# Exclude 
+ipaq_results <- ipaq_results[which(ipaq_results$excludeMin!=1),] # exclude data if it has more than 960mins per day 
+
+# write.csv(ipaq_results, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/tmp_files/trs_biome_ipaq.csv", row.names = T, quote = F)
+
+# Extract the 3 newly generated IPAQ variables
+ipaq_3<-ipaq_results[,c("participant_id", "ipaq_met", "ipaq_kilocalories", "ipaq_pacat")] 
+
+# Add 3 ipaq variables to clinical_trs
+clinical_trs<-clinical_trs%>%left_join(ipaq_3, by = "participant_id")
+
+```
+
+### 3.3.6 Checking dates and time that have passed between sample and questionaire collection
+- for tips on working with dates: https://data.library.virginia.edu/working-with-dates-and-time-in-r-using-the-lubridate-package/ 
+```{r}
+
+# Create a file with important sample dates
+dates_clinical_col<-c("participant_id", "date_birth", "date_of_interview_contact", "meta_test_date", "blood_test_date_v5") # take all variables with information about dates from the clinical dataset
+dates_clinical<-clinical_trs %>% dplyr::select(c(dates_clinical_col))    # take these columns
+all_dates_trs<-inner_join(dates_clinical,dates_trs, by = "participant_id", copy=FALSE, suffix=c("dates_clinical","dates_trs"))
+
+# Transform dates from class "character"" to class "date"
+all_dates_trs$date_birth<-dmy(all_dates_trs$date_birth)
+all_dates_trs$date_of_interview_contact<-dmy(all_dates_trs$date_of_interview_contact) # class(all_dates_trs$date_of_interview_contact)
+all_dates_trs$meta_test_date<-dmy(all_dates_trs$meta_test_date) #metabolic bloods
+all_dates_trs$blood_test_date_v5<-dmy(all_dates_trs$blood_test_date_v5)
+all_dates_trs$date_stool_sample_collected<-dmy(all_dates_trs$date_stool_sample_collected)
+all_dates_trs$date_stool_sample_received<-dmy(all_dates_trs$date_stool_sample_received)
+all_dates_trs$date_extraction<-dmy(all_dates_trs$date_extraction)
+
+# Calculate time passed between measurements and questionnaires
+
+## Metabolic investigations to poo
+meta_to_poo <- all_dates_trs$meta_test_date - all_dates_trs$date_stool_sample_collected
+all_dates_trs$meta_to_poo<-as.duration(meta_to_poo) / ddays(1)
+
+## Bloods to poo collection
+bloods_to_poo <- all_dates_trs$blood_test_date_v5 - all_dates_trs$date_stool_sample_collected
+all_dates_trs$bloods_to_poo<-as.duration(bloods_to_poo) / ddays(1)
+
+## Interview to poo collection
+interview_to_poo <- all_dates_trs$date_of_interview_contact - all_dates_trs$date_stool_sample_collected
+all_dates_trs$interview_to_poo<-as.duration(interview_to_poo) / ddays(1)
+
+## Poo collection to poo received
+collection_to_received <- all_dates_trs$date_stool_sample_collected - all_dates_trs$date_stool_sample_received
+all_dates_trs$collection_to_received<-as.duration(collection_to_received) / ddays(1)
+
+## Poo received to poo extraction
+received_to_extraction <- all_dates_trs$date_stool_sample_received - all_dates_trs$date_extraction
+all_dates_trs$received_to_extraction<-as.duration(received_to_extraction) / ddays(1)
+
+## Poo collection to poo extraction
+collection_to_extraction <- all_dates_trs$date_stool_sample_collected - all_dates_trs$date_extraction
+all_dates_trs$collection_to_extraction<-as.duration(collection_to_extraction) / ddays(1)
+
+write.csv(all_dates_trs, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/tmp_files/trs_biome_all_dates.csv", row.names = T, quote = F) 
+```
+
+``` {r eval=FALSE}
+
+## date_derivatisation
+
+
+## Received_to_derivatisation
+received_to_derivatisation <- all_dates_trs$date_stool_sample_received - all_dates_trs$date_derivatisation
+all_dates_trs$received_to_derivatisation<-as.duration(received_to_derivatisation) / ddays(1)
+
+## Extraction_to_derivatisation
+extraction_to_derivatisation <- all_dates_trs$date_extraction - all_dates_trs$date_derivatisation
+all_dates_trs$extraction_to_derivatisation<-as.duration(extraction_to_derivatisation) / ddays(1)
+
+
+```
+
+## 3.4 Checks 
+- Age is between 20 and 63
+- BMI is between 19.1 and 52.6
+
+```{r}
+
+# Check age is within the range 
+plot(clinical_trs$age)
+min(clinical_trs$age)
+max(clinical_trs$age)
+
+# Check BMI is within the range 
+plot(clinical_trs$bmi)
+min(clinical_trs$bmi)
+max(clinical_trs$bmi)
+
+```
+
+## 3.5 Reorder levels of food frequency columns
+
+### 3.5.1 Function
+
+```{r echo=FALSE}
+order_food_levels <- function(x) {
+
+# Order the factor levels
+# Rules:
+# - Never = 0
+# - month / week / day
+    # - less
+    # - numbers in order
+    # - more
+
+    tmp <- as.factor(x)
+    tmp.levels <- levels(tmp) 
+    
+    never <- grep("Never", tmp.levels)
+    month <- grep("month", tmp.levels)
+    week <- grep("week", tmp.levels)
+    day <- grep("day", tmp.levels)
+    
+    output = NULL
+    
+    if (length(never) == 1) {
+        output <- tmp.levels[never]
+    }
+    
+    if (length(month > 1)) {
+        # Take month variables
+        tmp.levels_month <- tmp.levels[month]
+
+        # Take Less/More: immediately put at the start/end
+        # Take levels within each time period bracket
+        less <- grep("Less", tmp.levels_month)
+        more <- grep("More", tmp.levels_month)
+        if (length(less) > 0 | length(more > 0)) {
+            tmp.levels_month2 <- tmp.levels_month[-c(less, more)]           
+        } else {
+            tmp.levels_month2 <- tmp.levels_month
+        }
+        # Take numeric factors and extract the numbers
+        num <- as.numeric(gsub("([0-9]+).*$", "\\1", tmp.levels_month2))
+
+        # Order the indices within the time category
+        # Put the NA first (eg. "Once per week" is less frequent/goes before other numbers)
+        tmp.levels_month2_ord <- tmp.levels_month2[order(num, na.last = FALSE)]
+        monthlev <- c(tmp.levels_month[less], tmp.levels_month2_ord, tmp.levels_month[more])
+        output <- c(output, monthlev)
+    }   
+    
+    if (length(week > 1)) {
+        # Take week variables
+        tmp.levels_week <- tmp.levels[week]
+
+        # Take Less/More: immediately put at the start/end
+        # Take levels within each time period bracket
+        less <- grep("Less", tmp.levels_week)
+        more <- grep("More", tmp.levels_week)
+        if (length(less) > 0 | length(more > 0)) {
+            tmp.levels_week2 <- tmp.levels_week[-c(less, more)]         
+        } else {
+            tmp.levels_week2 <- tmp.levels_week
+        }
+
+        # Take numeric factors and extract the numbers
+        num <- as.numeric(gsub("([0-9]+).*$", "\\1", tmp.levels_week2))
+
+        # Order the indices within the time category
+        # Put the NA first (eg. "Once per week" is less frequent/goes before other numbers)
+        tmp.levels_week2_ord <- tmp.levels_week2[order(num, na.last = FALSE)]
+        weeklev <- c(tmp.levels_week[less], tmp.levels_week2_ord, tmp.levels_week[more])
+        output <- c(output, weeklev)
+    }
+
+    if (length(day > 1)) {
+        # Take day variables
+        tmp.levels_day <- tmp.levels[day]
+
+        # Take Less/More: immediately put at the start/end
+        # Take levels within each time period bracket
+        less <- grep("Less", tmp.levels_day)
+        more <- grep("More", tmp.levels_day)
+        if (length(less) > 0 | length(more > 0)) {
+            tmp.levels_day2 <- tmp.levels_day[-c(less, more)]           
+        } else {
+            tmp.levels_day2 <- tmp.levels_day
+        }
+
+        # Take numeric factors and extract the numbers
+        num <- as.numeric(gsub("([0-9]+).*$", "\\1", tmp.levels_day2))
+
+        # Order the indices within the time category
+        # Put the NA first (eg. "Once per week" is less frequent/goes before other numbers)
+        tmp.levels_day2_ord <- tmp.levels_day2[order(num, na.last = FALSE)]
+        daylev <- c(tmp.levels_day[less], tmp.levels_day2_ord, tmp.levels_day[more])
+        output <- c(output, daylev)
+    }
+    # Checks
+    # - to capture all levels
+    # - to show all unique
+    print(c(length(output) == length(tmp.levels)) & length(unique(output)) == length(tmp.levels))
+    
+    return(output)
+
+}
+
+
+```
+
+### 3.5.2 Re-format
+ 
+```{r}
+# Taking out relevant measures from the AES
+
+food_col <- c("snacks","dairy","daily_softdrinks","diet_softdrink","softdrink","water_bottled_etc","juice","cordials","tea_coffee","beer","wine","spirits",
+    "flavoured_milk","plain_milk","cream","icecream","frozen_yoghurt","yoghurt","cottage_cheese","cheese","cheese_spread",
+    "muesli","porridge","breakfast_cereal","bread","muffin_etc","rice","other_grains","noodles","pasta",
+    "cakes_etc","sweet_pastries","puddings","sweet_biscuits","cream_biscuits","savoury_biscuits","savoury_combinations","sweet_combinations",
+    "snack_noodles","fruit_bars","snack_bars","muesli_bars",
+    "mince","beef_lamb_wovege","beef_lamb_wvege","plain_meat_wovege","plain_meat_wvege",
+    "chicken_wovege","chicken_wvege","crumbed_chicken","plain_chicken_wovege","plain_chicken_wvege",
+    "pork_wovege","pork_wvege","plain_pork_wovege","plain_pork_wvege","liver",
+    "crumbed_fish","fresh_fish","canned_fish","other_seafood",
+    "creamy_soup","clear_soup",
+    "tacos_etc","sausages_etc","hamburgers","pizza","pie_etc","hot_dog","savoury_pastries","hash_browns_etc",
+    "twisties_etc","potato_crisps_etc",
+    "creamy_iceblock","water_iceblock",
+    "chocolate","lollies",
+    "low_fat_dressing","mayonnaise",
+    "nuts","jam_etc","peanut_butter_etc","vegemite_etc","tomato_sauce_etc","devon_etc","bacon_etc","eggs",
+    "jelly","takeaway_fries","home_fries",
+    "potato","pumpkin","sweet_potato","cauliflower","green_beans","spinach","cabbage_etc",
+    "peas","broccoli","carrots","zucchini_etc","capsicum","corn_etc","mushrooms","tomatoes",
+    "lettuce","celery_etc","avocado","onion_etc",
+    "soybeans_etc","baked_beans","other_beans_etc",
+    "canned_fruit","fruit_salad","dried_fruit",
+    "apple_etc","orange_etc","banana","peach_etc","mango_etc","pineapple","grapes_etc","melon")
+
+micro_col <- c("thiamin","riboflavin","niacin","vit_b6","vit_b12","vit_c","vit_e","folate","retinol","beta_carotene","calcium","iodine","iron","magnesium","phosphorus","potassium","selenium","sodium","zinc")
+
+macro_col <- c("protein","fat","sat_fat","poly_fat","mono_fat","cholesterol","starch","sugar", "fibre")
+```
+
+
+```{r, message=FALSE}
+
+# Get the factor level orders
+aes_food_order <- sapply(aes_trs[,food_col], order_food_levels)
+
+# Order the values within the dataframe
+for (i in 1:length(food_col)) {
+    aes_trs[,food_col[i]] <- ordered(aes_trs[,food_col[i]], levels = aes_food_order[[i]])   
+}
+
+```
+
+### 3.5.3 Write output file
+
+```{r}
+write.csv(aes_trs, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/trs_biome_aes_order.csv", row.names = F, quote = F)
+```
+
+## 3.6 Merging multiple data files
+- Joining clinical_trs with SCFA, dates (SAGIS and IPAQ are already included): clinical_full
+
+```{r}
+# Joining multiple dataframes 
+clinical_full <- list(clinical_trs,scfa_weight) %>% 
+   reduce(left_join, by="participant_id")
+
+# Join dates
+clinical_full<-left_join(clinical_full,(aes_trs%>%dplyr::select("participant_id","arfs")),by="participant_id")  # add arfs from dietary data
+clinical_full<-right_join((clinical_full%>% dplyr::select(-"date_birth",-"date_of_interview_contact",-"meta_test_date",-"blood_test_date_v5")),all_dates_trs, by="participant_id")   # add dates data by removing duplicate date columns from clinical_trs
+
+```
+
+## 3.7 Decriptive stastistics 
+
+- age, sex, bmi, alcohol, smoking, living situation, smoking, alochol consumption, bristol stool chart, arfs 
+- https://thatdatatho.com/easily-create-descriptive-summary-statistic-tables-r-studio/ for different packages 
+- there are significant differences for: smoking, depression, anxiety, sagis, physical exercise, arfs
+
+```{r}
+# Take relevant demographics columns from clinical data 
+descriptive_col <- c("MG_SampleID", "participant_id", "participant_group", "age", "sex", "bmi", "scz", "clz", "living_situation", "smoking_status", "audit_total", "stool_type", "stool_type_regroup", "panss_total", "total_depression", "total_anxiety", "total_stress", "sagis_total_burden", "ipaq_pacat", "cloz_level", "cloz_norcloz_ratio", "arfs", "total_cholesterol", "fasting_glucose", "fasting_hdl", "fasting_ldl", "fasting_tg", "hba1c", "platelet", "neutrophil")  # create a vector with relevant column names
+descriptive<-clinical_full %>% dplyr::select(c(descriptive_col))    # take these columns
+#descriptive[c("mets_5", "mets_5_notes", "mets_2", "mets_3")] <- lapply(descriptive[c("mets_5", "mets_5_notes", "mets_2", "mets_3")], factor)
+
+
+# Create a table with descriptive statistics with "table1" package
+table1::label(descriptive$age) <- "Age"
+table1::label(descriptive$sex) <- "Sex"
+table1::label(descriptive$bmi) <- "Body Mass Index"
+table1::label(descriptive$living_situation) <- "Living Situation"
+table1::label(descriptive$smoking_status) <- "Smoking status"
+table1::label(descriptive$audit_total) <- "Alochol consumption"
+table1::label(descriptive$stool_type) <- "Stool type"
+table1::label(descriptive$stool_type_regroup) <- "Stool type regroup"
+table1::label(descriptive$sagis_total_burden) <- "SAGIS total burden"
+table1::label(descriptive$sagis_total_burden) <- "SAGIS total burden"
+table1::label(descriptive$ipaq_pacat) <- "Physical Exercise"
+table1::label(descriptive$arfs) <- "Australian Recommended Food Score"
+table1::label(descriptive$cloz_level) <- "Clozapine levels"
+table1::label(descriptive$cloz_norcloz_ratio) <- "Clozapine/Norclozapine ratio"
+
+#table1::table1(~age + sex + bmi + living_situation + smoking_status + audit_total +stool_type_regroup +arfs | participant_group, data = descriptive)
+```
+
+```{r eval=FALSE}
+# Create a table with descriptive statistics with "arsenal" package - 4 groups 
+descriptive_table<-tableby(participant_group ~age + sex + bmi + living_situation + smoking_status + audit_total + stool_type + stool_type_regroup + panss_total + total_depression + total_anxiety + total_stress + sagis_total_burden + ipaq_pacat + arfs + cloz_level + cloz_norcloz_ratio + total_cholesterol + fasting_glucose + fasting_hdl + fasting_ldl + fasting_tg + hba1c + neutrophil + platelet +mets_5 + mets_5_notes + mets_2 + mets_3, data=descriptive, digits = 2, pfootnote = TRUE)
+summary(descriptive_table, title ="TRS-Biome Decriptive Statistics", digits=2, pfootnote = TRUE)
+#write2word(descriptive_table, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_descriptive_statistics.docx") 
+# have to write table (above line) in console for it to work
+
+# Create a table with descriptive statistics with "arsenal" package - NC vs SCZ
+descriptive_table_nc_scz<-tableby(scz ~age + sex + bmi + living_situation + smoking_status + audit_total +stool_type_regroup + panss_total + total_depression + total_anxiety + total_stress + sagis_total_burden + ipaq_pacat + arfs + cloz_level +cloz_norcloz_ratio,data=descriptive, digits = 2, pfootnote = TRUE)
+summary(descriptive_table_nc_scz, title ="TRS-Biome Decriptive Statistics", digits=2, pfootnote = TRUE)
+#write2word(descriptive_table_nc_scz, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_descriptive_statistics_nc_scz.docx") 
+# have to write table (above line) in console for it to work
+
+# Create a table with descriptive statistics with "arsenal" package - AAP vs CLZ
+descriptive_table_aap_clz<-tableby(clz ~age + sex + bmi + living_situation + smoking_status + audit_total +stool_type_regroup + panss_total + total_depression + total_anxiety + total_stress + sagis_total_burden + ipaq_pacat + arfs + cloz_level +cloz_norcloz_ratio,data=subset(descriptive, scz %in% "scz"), digits = 2, pfootnote = TRUE)
+summary(descriptive_table_aap_clz, title ="TRS-Biome Decriptive Statistics", digits=2, pfootnote = TRUE)
+#write2word(descriptive_table_aap_clz, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_descriptive_statistics_aap_clz.docx") 
+# have to write table (above line) in console for it to work
+
+# Create a table with descriptive statistics with "arsenal" package - CR vs CNR
+descriptive_table_cr_cnr<-tableby(participant_group ~age + sex + bmi + living_situation + smoking_status + audit_total +stool_type_regroup + panss_total + total_depression + total_anxiety + total_stress + sagis_total_burden + ipaq_pacat + arfs + cloz_level +cloz_norcloz_ratio,data=subset(descriptive, clz %in% "clz"), digits = 2, pfootnote = TRUE)
+summary(descriptive_table_cr_cnr, title ="TRS-Biome Decriptive Statistics", digits=2, pfootnote = TRUE)
+#write2word(descriptive_table_cr_cnr, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_descriptive_statistics_cr_cnr.docx") 
+# have to write table (above line) in console for it to work
+
+```
+
+
+## 3.8 Colour schemes for plots
+
+```{r}
+
+color_all<-c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")
+color_nc_scz<-c("#D81B60", "#E8913C")
+color_aap_clz<-c("#21DAC9", "#102C8E")
+color_cr_cnr<-c("#FFC107", "#3A9A8A")
+color_nc_aap<-c("#D81B60", "#21DAC9")
+
+```
+
+# 4 Basic demographics 
+- for bar graphs and histograms: http://www.cookbook-r.com/Graphs/Bar_and_line_graphs_(ggplot2)/ 
+
+```{r}
+
+# Groups 
+print("NC vs AAP Vs CR vs CNR")
+table(clinical_full$participant_group)
+
+# Age and BMI
+ggplot(clinical_full, aes(x = age, y = bmi, color = participant_group)) + 
+    geom_point(alpha = 1) +
+    labs(legend.title = "Participant") +
+    theme(legend.position = "bottom") +
+  scale_color_manual(values=color_all)
+```
+# 5. Dietary PCs
+## 5.1 PE on 13 food groups
+### 5.1.1 PCA
+
+```{r}
+# Merge AES with basic demographic data 
+aes_demo<-inner_join(aes_trs, subset(descriptive, select=-c(arfs)), by = "participant_id", copy=FALSE)
+#write.csv(aes_demo, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/trs_biome_97_aes_demo.csv", row.names = T, quote = F) 
+```
+
+```{r}
+# Subset
+aes_pe_13 <- aes_demo %>% dplyr::select(participant_id, participant_group, clz, scz, sex, bmi, age, peveg, pefruit, pemeat, pealt, pegrains, pedairy, pesweet_drink, pepack_snack, peconfect, pebaked_products, petakeaway, pecondiments, pefatty_meats) # pe food
+
+aes_pe_13[,6:ncol(aes_pe_13)] <- sapply(aes_pe_13[,6:ncol(aes_pe_13)], as.numeric)
+
+# Performing PCA
+aes_pe_13.pca <- prcomp(aes_pe_13[,c(8:ncol(aes_pe_13))], center = T, scale = T)
+aes_pca_13_coord<-get_pca_ind(aes_pe_13.pca)$coord
+write.csv(aes_pca_13_coord, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/aes_pca_13_coord.csv", row.names = T, quote = F)
+
+# Creating a barplot for percentages explained by each PC
+pca.var<-aes_pe_13.pca$sdev^2
+pca.var.per<-round(pca.var/sum(pca.var)*100,1)
+barplot(pca.var.per,main="Scree Plot", xlab="Principal Component", ylab="Percent Variation")
+
+aes_pe_13.grp <- aes_pe_13$participant_group
+aes_pe_13.scz <- aes_pe_13$scz
+aes_pe_13.clz <- aes_pe_13$clz
+aes_pe_13.ind <- aes_pe_13$participant_id
+aes_pe_13.age <- as.factor(round(aes_pe_13$age, 0))
+
+# Generate plots
+# by Group
+ggbiplot::ggbiplot(aes_pe_13.pca, groups=aes_pe_13.grp, labels=aes_pe_13.ind, ellipse = TRUE)
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/TRS_BIOME_diet_pe_group.pdf")
+
+# by SCZ diagnosis
+ggbiplot::ggbiplot(aes_pe_13.pca, groups=aes_pe_13.scz, labels=aes_pe_13.ind, ellipse = TRUE)
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/TRS_BIOME_diet_pe_scz.pdf")
+
+
+# by Age
+ggbiplot::ggbiplot(aes_pe_13.pca, groups=aes_pe_13.age, labels=aes_pe_13.ind, ellipse = TRUE)
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/TRS_BIOME_diet_pe_age.pdf", height = 8, width = 8)
+
+```
+
+### 5.1.3 Check PC interpretability
+
+- PC1 (19%): high veg, fruit and alternative, med condiments, low take away and confectionary
+- PC2 (14%): high grain and meat; low veg, alternatives, confectionary and condiments, 
+- PC3 (12%): high meat, takeaway and fatty meats, low dairy and baked products 
+- PC4 (10%): high meat, medium dairy, low on sweet drink, snacks and condiments 
+
+```{r}
+
+# PC loadings per questionnaire
+aes_pe_13.lod <- aes_pe_13.pca$rotation
+datatable(aes_pe_13.lod) %>% formatRound("PC1", 3) %>% formatRound("PC2", 3) %>% formatRound("PC3", 3) %>% formatRound("PC4", 3) %>% formatRound("PC5", 3) %>% formatRound("PC6", 3) %>% formatRound("PC7", 3) %>% formatRound("PC8", 3) %>% formatRound("PC9", 3) %>% formatRound("PC10", 3) %>% formatRound("PC11", 3) %>% formatRound("PC12", 3) %>% formatRound("PC13", 3) # rounding PCs to 3 decimal places
+
+aes_pe_13.lod.long <- melt(aes_pe_13.lod) # melting the dataframe and making it long
+colnames(aes_pe_13.lod.long) <- c("Food_group", "PC", "Loading")
+# all PCs
+ggplot(data = aes_pe_13.lod.long, aes(x = PC, y = Loading, fill = Food_group)) +
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_light()
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/aes_pc_13_loading.pdf", height = 8, width = 14)
+
+# PCs 1-4
+aes_pe_13.lod.long1to4 <- aes_pe_13.lod.long %>% filter(PC %in% c("PC1", "PC2", "PC3", "PC4"))
+ggplot(data = aes_pe_13.lod.long1to4, aes(x = PC, y = Loading, fill = Food_group)) + 
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_light()
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/aes_pc_4_loading.pdf", height = 8, width = 12)
+
+# PCs 1-3
+aes_pe_13.lod.long1to3 <- aes_pe_13.lod.long %>% filter(PC %in% c("PC1", "PC2", "PC3"))
+ggplot(data = aes_pe_13.lod.long1to3, aes(x = PC, y = Loading, fill = Food_group)) + 
+  geom_bar(stat="identity", position=position_dodge()) +
+  theme_light()
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/aes_pc_3_loading.pdf", height = 8, width = 6)
+
+```
+
+### 5.1.3 Check variance explained per PC
+
+```{r}
+
+fviz_eig(aes_pe_13.pca) # extract  amount of variation explained
+get_eig(aes_pe_13.pca) # get eigen values (normally take ones >1 )
+print(summary(aes_pe_13.pca))
+summary(aes_pe_13.pca)
+
+```
+
+### 5.1.4 Regress age on PCs (% energy only)
+- not a strong effect of age on diet
+
+```{r}
+
+pc.age.pe <- aes_pe_13.pca$x # where x is the coord of the pca
+age.pe.lm <- lm(aes_pe_13$age ~ pc.age.pe)
+summary(age.pe.lm)
+
+```
+
+### 5.1.5 Export 4 PCs
+
+```{r}
+aes_pe_13.pcs <- aes_pe_13.pca$x
+aes_pe_13.pcs <- data.frame(participant_id = aes_pe_13.ind, participant_type = aes_pe_13$scz, aes_pe_13.pcs)
+
+pe13_pc4<-aes_pe_13.pcs[,c(1,3,4,5,6)] # Take first 4 PCs
+
+
+```
+
+## 5.2 PCA on clr-transformed 13 food components 
+- PC1 (18%): high on snacks, confectionary and baked prodcuts; low on meat, veg, grains and takeaway
+- PC2 (15%): low on veg, alternative and condiments; high on grains and dairy
+- PC3 (12%): low on fruit and laternative meats; high on fatty meats
+- PC4 (11%): low on baked prodcuts and fatty meats, high on sweet drinks and snacks
+
+### 5.2.1 CLR transformation
+```{r}
+aes_pe_13.clr.tmp <- logratio.transfo(as.matrix(aes_pe_13[,8:ncol(aes_pe_13)]), logratio = "CLR", offset = 0.001)
+class(aes_pe_13.clr.tmp) <- "matrix"
+#aes_pe_13.clr.tmp <- clr(as.matrix(aes_pe_13[,8:ncol(aes_pe_13)]))
+aes_pe_13.clr <- data.frame(aes_pe_13[,1:7], aes_pe_13.clr.tmp)
+
+aes_pe_13.clr$participant_group <- factor(aes_pe_13.clr$participant_group, levels=c('NC', 'AAP', 'CR', 'CNR'))
+
+# Distributions of continuous variables - 4 groups
+y <- as.factor(aes_pe_13.clr$participant_group)
+x <- aes_pe_13.clr[,c(6:ncol(aes_pe_13.clr))]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales, auto.key=list(columns=3))
+
+# Distributions of continuous variables
+y <- as.factor(aes_pe_13.clr$scz)
+x <- aes_pe_13.clr[,c(6:ncol(aes_pe_13.clr))]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales, auto.key=list(columns=3))
+
+```
+
+### 5.2.2 Generate PCs
+```{r}
+aes_pe_13.clr.pca <- prcomp(aes_pe_13.clr[,c(8:ncol(aes_pe_13.clr))], center = T, scale = T)
+
+aes_pe_13.clr.age <- as.factor(round(aes_pe_13.clr$age, 0))
+aes_pe_13.clr.bmi<- as.factor(round(aes_pe_13.clr$bmi, 0))
+
+# Generate plots
+ggbiplot(aes_pe_13.clr.pca, groups=aes_pe_13.clr$scz, ellipse = TRUE, circle = TRUE) +
+  scale_color_manual(values=color_nc_scz) +
+  theme_minimal()
+
+pca_4_groups_pc1_pc2 <- ggbiplot(aes_pe_13.clr.pca, groups=aes_pe_13.clr$participant_group, ellipse = TRUE, circle = TRUE, var.axes = FALSE) +
+  scale_color_manual(values=color_all, guide="none") +
+  xlab("PC1: 18.8% variance") +
+  ylab("PC2: 14.5% variance") +
+  scale_x_continuous(limits = c(-4, 4)) + 
+  scale_y_continuous(limits = c(-4.5,4)) +
+  theme_minimal()
+
+pca_4_groups_pc3_pc4 <- ggbiplot(aes_pe_13.clr.pca, choices = c(3,4),groups=aes_pe_13.clr$participant_group, ellipse = TRUE, circle = TRUE, var.axes = FALSE) +
+  scale_color_manual(values=color_all, guide="none") +
+  xlab("PC3: 11.6% variance") +
+  ylab("PC4: 10.9% variance") +
+  scale_x_continuous(limits = c(-4, 4)) + 
+  scale_y_continuous(limits = c(-4.5,4)) +
+  theme_minimal()
+
+
+grid.arrange(pca_4_groups_pc1_pc2, pca_4_groups_pc3_pc4,ncol=2, widths = c(100,100), heights= c(100,100))
+
+```
+
+### 5.2.3 Check PC interpretability 
+
+```{r}
+# PC loadings per questionnaire
+aes_pe_13.clr.lod <- aes_pe_13.clr.pca$rotation
+datatable(aes_pe_13.clr.lod) %>% formatRound("PC1", 3) %>% formatRound("PC2", 3) %>% formatRound("PC3", 3) %>% formatRound("PC4", 3) %>% formatRound("PC5", 3) %>% formatRound("PC6", 3) %>% formatRound("PC7", 3) %>% formatRound("PC8", 3) %>% formatRound("PC9", 3) %>% formatRound("PC10", 3) %>% formatRound("PC11", 3) %>% formatRound("PC12", 3) %>% formatRound("PC13", 3) 
+
+# Plot 13 PCs
+aes_pe_13.clr.lod.long <- melt(aes_pe_13.clr.lod)
+colnames(aes_pe_13.clr.lod.long) <- c("Food_group", "PC", "Loading")
+ggplot(data = aes_pe_13.clr.lod.long, aes(x = PC, y = Loading, fill = Food_group)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  theme_minimal()
+
+# Plot 4 PCs
+aes_pe_13.clr.lod.long1to4 <- aes_pe_13.clr.lod.long %>% filter(PC %in% c("PC1", "PC2", "PC3", "PC4"))
+ggplot(data = aes_pe_13.clr.lod.long1to4, aes(x = PC, y = Loading, fill = Food_group)) + 
+  geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_discrete(name = "Energy intake from:",labels = c("vegetables", "fruit", "meats", "alternative_meats", "grains", "dairy","sweet_drinks", "pack_snacks", "confectionary", "baked_products","takeaway","condiments", "fatty_meats")) +
+  theme_minimal()
+ggsave("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/aes_pc_4_clr_loading.pdf", height = 8, width = 12)
+
+```
+
+### 5.2.4 Check variance explained by PC
+
+```{r}
+fviz_eig(aes_pe_13.clr.pca)
+print(summary(aes_pe_13.clr.pca))
+summary(aes_pe_13.clr.pca)
+```
+
+### 5.2.5 Export 4 PCs
+
+```{r}
+aes_pe_13.clr.pcs <- aes_pe_13.clr.pca$x
+aes_pe_13.clr.pcs <- data.frame(participant_id = aes_pe_13.clr$participant_id, participant_type = aes_pe_13.clr$scz, aes_pe_13.clr.pcs)
+pe13_pc4_clr<-aes_pe_13.clr.pcs[,c(1,3,4,5,6)] # Take first 4 PCs
+setnames(pe13_pc4_clr, old = c('PC1','PC2','PC3','PC4'), new = c('PC1_clr','PC2_clr','PC3_clr','PC4_clr'))
+
+```
+
+### 5.3. Extract PCs in a file
+
+```{r}
+
+#write.csv(aes_pe_13.clr.lod, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/trs_biome_aes_13pcs_loadings.clr.csv", row.names = T, quote = F)
+
+# Extracting 4PCs from clr and non-clr file
+aes_8<- left_join(pe13_pc4, pe13_pc4_clr, by='participant_id')
+# Save file into a new variable
+#write.csv(aes_8, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/trs_biome_aes_pe13_4pcs_4pcs.clr.csv", row.names = T, quote = F)
+
+
+# Extracting 13 dietary PCs from clr only
+aes_pe_13.clr.pcs.extract<-aes_pe_13.clr.pcs[,c(1,3:ncol(aes_pe_13.clr.pcs))]
+
+# Save file into a new variable
+#write.csv(aes_pe_13.clr.pcs.extract, #"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/AES/trs_biome_aes_pe13_13pcs_clr.csv", row.names = T, quote = F)
+
+# Merge PC file with clinical_full file
+clinical_full<-left_join(clinical_full,aes_pe_13.clr.pcs.extract,by="participant_id")
+
+clinical_full$participant_group <- factor(clinical_full$participant_group, levels=c('NC', 'AAP', 'CR', 'CNR'))
+
+# Extract file
+write.csv(clinical_full, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_full_clinical_ipaq_sagis_scfa_dates_arfs_pe13_pcs.csv", row.names = FALSE, quote = F)
+
+```
+
+
+# 6. Diet diversity
+- There are no significant differences between groups in food, macro and micro (with shannon)
+
+## 6.1 Merge demo file with aes
+
+```{r}
+diet_diversity <- data.frame(participant_id = aes_demo$participant_id, 
+    participant_group = as.factor(aes_demo$participant_group), 
+    age = aes_demo$age, sex = aes_demo$sex,
+    shannon_micro = vegan::diversity(sapply(aes_demo[,micro_col], as.numeric), "shannon"),
+    shannon_macro = vegan::diversity(sapply(aes_demo[,macro_col], as.numeric), "shannon"),
+    shannon_food = vegan::diversity(sapply(aes_demo[,food_col], function(x) as.numeric(as.factor(x))), "shannon"))
+
+write.csv(diet_diversity, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_diet_diversity.csv", row.names = F, quote = F)
+
+```
+
+## 6.2 Plot
+
+```{r}
+
+# Plot
+diet_diversity.long <- melt(diet_diversity, 
+    id.vars = c("participant_id", "participant_group", "age", "sex"),
+    measure.vars = c("shannon_micro", "shannon_macro", "shannon_food"),
+    variable.name = "diet_variable",
+    value.name = "shannon")
+
+color_all<-c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")
+
+ggplot(diet_diversity.long, 
+    aes(x = participant_group, y = shannon, colour = participant_group)) + 
+    geom_boxplot() +
+    facet_grid(cols = vars(diet_variable)) +
+    scale_color_manual(values=color_all)
+```
+
+### 6.2.1 Shannon_food
+
+```{r}
+
+# Plot
+ggplot(diet_diversity.long %>% filter(diet_variable == "shannon_food"), 
+    aes(x = participant_group, y = shannon, colour = participant_group)) + 
+    geom_violin() + geom_jitter(width = 0.1) +  theme(legend.position="NA")+
+    facet_grid(cols = vars(diet_variable))
+
+# Checking for shannon_food differences between groups - Unadjusted ANOVA
+shannon_food.aov<-aov(shannon_food~participant_group, data = diet_diversity) #ANOVA
+summary(shannon_food.aov)
+
+# Checking for parametric assumptions for shannon_food
+plot(density(diet_diversity$shannon_food))  #density plot
+qqPlot(diet_diversity$shannon_food)   ## QQ plot --> looks normally distributed
+shapiro.test(diet_diversity$shannon_food) # Run Shapiro-Wilk test, if p > .05 --> normality is assumed --> check homogeneity
+shapiro.test(shannon_food.aov$residuals) # could also run it on the residuals
+dotplot(shannon_food~participant_group, data=diet_diversity) # check visually wether variances are equal across groups
+leveneTest(shannon_food~participant_group, data = diet_diversity) #Check for homogeneity of variances, if p>0.05 ->parametric
+
+# Adjusted for age and sex
+diet_diversity$shannon_food_resid <- residuals(lm(shannon_food ~ age + as.factor(sex), data = diet_diversity))
+food.aov <- aov(shannon_food_resid ~ participant_group, data = diet_diversity)
+summary(food.aov)
+
+```
+
+### 6.2.2 Shannon_macro
+
+```{r}
+# Plot
+ggplot(diet_diversity.long %>% filter(diet_variable == "shannon_macro"), 
+    aes(x = participant_group, y = shannon, colour = participant_group)) + 
+    geom_violin() + geom_jitter(width = 0.1)  +  theme(legend.position="NA")+
+    facet_grid(cols = vars(diet_variable))
+
+# Checking for parametric assumptions for shannon_macro
+shannon_macro.aov<-aov(shannon_macro~participant_group, data = diet_diversity) #ANOVA
+qqPlot(diet_diversity$shannon_macro)   ## QQ plot --> looks normally distributed
+shapiro.test(diet_diversity$shannon_macro) # Run Shapiro-Wilk test, p<0.05 --> Kruskal Wallis
+
+# Checking for macro differences between groups - Kruskal Wallis
+kruskal.test(shannon_macro ~ participant_group, data = diet_diversity)
+
+```
+
+### 6.2.3 Shannon_micro
+
+```{r}
+
+# Plot
+ggplot(diet_diversity.long %>% filter(diet_variable == "shannon_micro"), 
+    aes(x = participant_group, y = shannon, colour = participant_group)) + theme(legend.position="NA")+ 
+    geom_violin()  + geom_jitter(width = 0.1) +
+    facet_grid(cols = vars(diet_variable))
+
+# Checking for parametric assumptions for shannon_micro
+shannon_micro.aov<-aov(shannon_micro~participant_group, data = diet_diversity) #ANOVA
+qqPlot(diet_diversity$shannon_micro)   ## QQ plot --> looks normally distributed
+shapiro.test(diet_diversity$shannon_micro) # Run Shapiro-Wilk test, p<0.05 --> Kruskal Wallis
+
+# Checking for micro differences between groups - Kruskal Wallis
+kruskal.test(shannon_micro ~ participant_group, data = diet_diversity)
+
+```
+
+## 6.2 Australian recommended food score (arfs)
+- differences between NC and CNR/CR
+```{r}
+
+# ARFS descriptive stats 
+group_by(aes_demo, participant_group) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(arfs),
+    sd = sd(arfs)
+  )
+
+# Plot ARFS
+ggplot(aes_demo, aes(x=participant_group, y=arfs,                     colour=participant_group)) +
+  geom_violin(outlier.shape = NA) + geom_jitter(width = 0.1) +
+  theme(legend.position="top") +
+  labs(title="ARFS per group", x="Groups", y="ARFS") 
+
+# Checking for parametric assumptions for arfs
+arfs.aov<-aov(arfs~participant_group, data = aes_demo) #ANOVA
+qqPlot(aes_demo$arfs)   ## QQ plot --> looks normally distributed
+shapiro.test(aes_demo$arfs) # Run Shapiro-Wilk test, p>0.05 --> Levene's
+dotplot(arfs~participant_group, data=aes_demo) # check visually wether variances are equal across groups
+leveneTest(arfs~participant_group, data = aes_demo) #Check for homogeneity of variances, if p>0.05 ->parametric
+
+# ANOVA
+arfs.aov<-aov(arfs~participant_group, data=aes_demo)
+summary(arfs.aov)
+report(arfs.aov)
+
+# Post-hoc test - Tukey
+tukey.arfs<-TukeyHSD(arfs.aov)  # comapres all groups --> lower stats power
+plot(TukeyHSD(arfs.aov))
+
+# Post-hoc test - Dunnett (allows you to select comparisons only to reference category
+#you needgroup to be a factor for this to work
+aes_demo$participant_group <- relevel(aes_demo$participant_group, ref = "NC")  # Change reference category of group so the test only compares all groups to the reference group
+dunnett.arfs<- glht(arfs.aov,
+  linfct = mcp(participant_group = "Dunnett"))
+summary(dunnett.arfs)
+
+```
+
+
+# 7. Diet metrics
+## 7.1 Macronutrients
+### 7.1.1 Graphs
+
+```{r}
+# Subset
+aes_macro <- aes_demo%>%
+  dplyr::select(participant_id, participant_group, sex, clz, scz, age, bmi, protein,fat,sat_fat,poly_fat,mono_fat,cholesterol,starch, sugar, fibre, moisture) # macronutrients
+
+aes_macro[,5:ncol(aes_macro)] <- sapply(aes_macro[,5:ncol(aes_macro)], as.numeric)
+
+# Show the table
+datatable(aes_macro, rownames = FALSE, filter="top", options = list(pageLength = 10, scrollX=T))
+
+# Correlation plot
+correlations <- cor(aes_macro[,c(6:ncol(aes_macro))]) 
+corrplot(correlations, order = "hclust", method = "circle")
+
+# Distributions of continuous variables
+# library(caret)
+y <- as.factor(aes_macro$participant_group)
+x <- aes_macro[,c(6:ncol(aes_macro))]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales, auto.key=list(columns=3))
+
+```
+### 7.1.2 Compare groups: log regression
+- https://www.datacamp.com/tutorial/logistic-regression-R
+- https://www.statmethods.net/advstats/glm.html
+- 
+ - difference in sugar levels between NC and AAP
+ - difference in fibre, sugar and cholesterol between NC and SCZ
+ - difference in cholesterol between CR and CNR
+ 
+#### 7.1.2.1 NC to AAP
+ - difference in sugar levels between NC and AAP
+```{r}
+# logistic regression comparing NC and AAP
+aes_macro_lm_nc_aap.df <- aes_macro %>%  
+  filter(clz != "clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_macro_nc_aap <- glm(participant_group~., data=aes_macro_lm_nc_aap.df, family = binomial)
+summary(glm_macro_nc_aap)
+
+glm.probs <- predict(glm_macro_nc_aap,type = "response")
+glm.probs[1:5]
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_macro_nc_aap), confint(glm_macro_nc_aap)))
+
+```
+#### 7.1.2.2 NC to SCZ
+```{r}
+# logistic regression comparing NC and SCZ
+aes_macro_lm_nc_scz.df <- aes_macro %>% 
+    mutate(scz=as.factor(scz)) %>%
+    dplyr::select(- participant_id, -clz, -participant_group) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(sex=as.factor(sex))
+glm_macro_nc_scz <- glm(scz~., data=aes_macro_lm_nc_scz.df, family = binomial)
+summary(glm_macro_nc_scz)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_macro_nc_scz), confint(glm_macro_nc_scz)))
+
+```
+
+#### 7.1.2.3 CR to CNR
+```{r}
+# logistic regression comparing CR and CNR
+aes_macro_lm_cr_cnr.df <- aes_macro %>%  
+  filter(clz != "no_clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_macro_cr_cnr <- glm(participant_group~., data=aes_macro_lm_cr_cnr.df, family = binomial)
+summary(glm_macro_cr_cnr)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_macro_cr_cnr), confint(glm_macro_cr_cnr)))
+```
+
+### 7.1.3 PCA plot
+- https://www.datacamp.com/community/tutorials/pca-analysis-r
+```{r}
+aes_macro.pca <- prcomp(aes_macro[,c(8:ncol(aes_macro))], center = T, scale = T)
+aes_macro.ind <- aes_macro$participant_group
+ggbiplot(aes_macro.pca, ellipse=TRUE, var.axes=FALSE,groups=aes_macro.ind)
+```
+
+```{r}
+# PCA with mixomics
+tune.pca.macro<-tune.pca(aes_macro, ncomp=3, scale = TRUE)
+plot(tune.pca.macro)
+tune.pca.macro$prop_expl_var$X
+tune.pca.macro$cum.var
+head(selectVar(tune.pca.macro, comp = 1)$value)
+
+# Plot PCA components 1 and 2
+
+plotIndiv(tune.pca.macro,
+          comp = c(1, 2),   # Specify components to plot
+          ind.names = TRUE, # Show row names of samples
+          group = aes_demo$participant_group,
+          ellipse = TRUE, 
+          title = 'AES for TRS-BIOME, PCA comp 1 - 2',
+          legend = TRUE, legend.title = 'Participant Group')
+
+```
+
+## 7.2 Micronutrients
+- vitamins, minerals, etc
+### 7.2.1 Graphs
+```{r}
+# Subset
+aes_micro <- aes_demo %>%
+  dplyr::select(participant_id, participant_group, sex, clz, scz, age, bmi, thiamin,riboflavin,niacin,vit_b6,vit_b12,vit_c,vit_e,folate,retinol,beta_carotene,calcium, iodine, iron,magnesium, phosphorus, potassium, selenium, sodium,zinc)  # micronutrients
+
+aes_micro[,5:ncol(aes_micro)] <- sapply(aes_micro[,5:ncol(aes_micro)], as.numeric)
+
+# Show the table
+datatable(aes_micro, rownames = FALSE, filter="top", options = list(pageLength = 10, scrollX=T) )
+
+# Correlation plot
+correlations <- cor(aes_micro[,c(6:ncol(aes_micro))]) 
+corrplot(correlations, order = "hclust", method = "circle")
+
+# Distributions of continuous variables
+y <- as.factor(aes_micro$participant_group)
+x <- aes_micro[,c(6:ncol(aes_micro))]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales, auto.key=list(columns=3))
+
+featurePlot(x=x, y=y, plot="strip", scales=scales, auto.key=list(columns=3))
+
+```
+### 7.1.2 Compare groups: log regression
+- https://www.datacamp.com/tutorial/logistic-regression-R
+ - difference in sugar levels between NC and AAP
+ - difference in fibre, sugar and cholesterol between NC and SCZ
+ - difference in cholesterol between CR and CNR
+ 
+#### 7.1.2.1 NC to AAP
+ - no differences
+```{r}
+# logistic regression comparing NC and AAP
+aes_micro_lm_nc_aap.df <- aes_micro %>%  
+  filter(clz != "clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_micro_nc_aap <- glm(participant_group~., data=aes_micro_lm_nc_aap.df, family = binomial)
+summary(glm_micro_nc_aap)
+
+glm.probs <- predict(glm_micro_nc_aap,type = "response")
+glm.probs[1:5]
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_micro_nc_aap), confint(glm_micro_nc_aap)))
+
+```
+#### 7.1.2.2 NC to SCZ
+- nominal differences in iron and beta-carotene
+```{r}
+# logistic regression comparing NC and SCZ
+aes_micro_lm_nc_scz.df <- aes_micro %>% 
+    mutate(scz=as.factor(scz)) %>%
+    dplyr::select(- participant_id, -clz, -participant_group) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(sex=as.factor(sex))
+glm_micro_nc_scz <- glm(scz~., data=aes_micro_lm_nc_scz.df, family = binomial)
+summary(glm_micro_nc_scz)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_micro_nc_scz), confint(glm_micro_nc_scz)))
+
+```
+
+#### 7.1.2.3 CR to CNR
+- nominal difference in bmi
+```{r}
+# logistic regression comparing CR and CNR
+aes_micro_lm_cr_cnr.df <- aes_micro %>%  
+  filter(clz != "no_clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_micro_cr_cnr <- glm(participant_group~., data=aes_micro_lm_cr_cnr.df, family = binomial)
+summary(glm_micro_cr_cnr)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_micro_cr_cnr), confint(glm_micro_cr_cnr)))
+```
+
+### 7.2.3 PCA plot 
+```{r}
+# PCA with mixomics
+tune.pca.micro<-tune.pca(aes_micro, ncomp=3, scale = TRUE)
+plot(tune.pca.micro)
+tune.pca.micro$prop_expl_var$X
+tune.pca.micro$cum.var
+head(selectVar(tune.pca.micro, comp = 1)$value)
+
+# Plot PCA components 1 and 2
+
+plotIndiv(tune.pca.micro,
+          comp = c(1, 2),   # Specify components to plot
+          ind.names = TRUE, # Show row names of samples
+          group = aes_demo$participant_group,
+          ellipse = TRUE, 
+          title = 'AES for TRS-BIOME, PCA comp 1 - 2',
+          legend = TRUE, legend.title = 'Participant Group')
+
+```
+
+## 7.3 Proportion of energy
+
+```{r}
+# Check what pe-s are in the dataset
+colnames(aes_demo[,grep("pe", names(aes_demo))])
+
+```
+
+### 7.3.1 By macronutrient
+
+```{r}
+# Display data
+aes_pe_macro <- aes_demo[,c("participant_id", "participant_group", "clz", "scz","sex", "age",  "peprotein", "pecarbohydrate", "pefats", "pesatfats", "pepolyfats", "pemonofats","peaddedsugars")]
+
+aes_pe_macro[,6:ncol(aes_pe_macro)] <- sapply(aes_pe_macro[,6:ncol(aes_pe_macro)], as.numeric)
+
+datatable(aes_pe_macro, rownames = FALSE, filter="top", options = list(pageLength = 10, scrollX=T) )
+
+```
+#### 7.3.1.1 Graph
+
+```{r}
+# Box and whisker plot
+aes_pe_macro.long <- melt(aes_pe_macro, id.vars=c("participant_group"), measure.vars=c("peprotein", "pecarbohydrate", "pefats", "pesatfats", "pepolyfats", "pemonofats","peaddedsugars"), variable.name="macronutrient")
+colnames(aes_pe_macro.long) <- c("group", "macronutrient", "prop_energy")
+aes_pe_macro.gg <- ggplot(aes_pe_macro.long, aes(x=macronutrient, y=prop_energy, colour=group)) +
+  geom_boxplot()
+aes_pe_macro.gg
+
+```
+
+#### 7.2.1.2 Comparing Groups - Log regression
+##### 7.2.1.2.1 NC and AAP
+```{r}
+# logistic regression comparing NC and APP
+aes_pe_macro_nc_aap.df <- aes_pe_macro %>%
+    filter(clz != "clz") %>%
+    dplyr::select(-participant_id, -clz, -scz) %>%  mutate(participant_group=as.factor(participant_group))
+glm_pe_macro_nc_aap <- glm(participant_group~., data=aes_pe_macro_nc_aap.df, family = binomial)
+summary(glm_pe_macro_nc_aap)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_macro_nc_aap), confint(glm_pe_macro_nc_aap)))
+
+```
+
+##### 7.2.1.2.2 NC to SCZ
+- differences in peprotein
+```{r}
+# logistic regression comparing NC and SCZ
+aes_pe_macro_lm_nc_scz.df <- aes_pe_macro %>% 
+    mutate(scz=as.factor(scz)) %>%
+    dplyr::select(- participant_id, -clz, -participant_group) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(sex=as.factor(sex))
+glm_pe_macro_nc_scz <- glm(scz~., data=aes_pe_macro_lm_nc_scz.df, family = binomial)
+summary(glm_pe_macro_nc_scz)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_macro_nc_scz), confint(glm_pe_macro_nc_scz)))
+
+```
+
+#### 7.1.2.3 CR to CNR
+- no differences
+```{r}
+# logistic regression comparing CR and CNR
+aes_pe_macro_lm_cr_cnr.df <- aes_pe_macro %>%  
+  filter(clz != "no_clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_pe_macro_cr_cnr <- glm(participant_group~., data=aes_pe_macro_lm_cr_cnr.df, family = binomial)
+summary(glm_pe_macro_cr_cnr)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_macro_cr_cnr), confint(glm_pe_macro_cr_cnr)))
+```
+### 7.3.2 By core vs non-core foods
+
+```{r}
+aes_pe_core <- aes_demo %>% dplyr::select(participant_id, participant_group, scz, clz, sex, age, pecore, penoncore)
+
+aes_pe_core[,6:ncol(aes_pe_core)] <- sapply(aes_pe_core[,6:ncol(aes_pe_core)], as.numeric)
+```
+
+#### 7.3.2.1 Graph
+
+```{r}
+# Box and whisker plot
+aes_pe_core.long <- melt(aes_pe_core, id.vars=c("participant_group"), measure.vars=c("pecore", "penoncore"), variable.name="core_noncore")
+colnames(aes_pe_core.long) <- c("group", "core_noncore", "prop_energy")
+aes_pe_core.gg <- ggplot(aes_pe_core.long, aes(x=core_noncore, y=prop_energy, colour=group)) +
+  geom_boxplot()
+aes_pe_core.gg
+```
+
+#### 7.3.2.2 Linear model for different proportion of healthy (core) foods between groups
+```{r}
+
+# linear model comparing pecore between groups
+aes_pe_core.lm <- lm(pecore~participant_group+age, data=aes_pe_core)
+summary(aes_pe_core.lm)
+```
+
+#### 7.3.2.3 Variances test for differences in mean + differences in variation in core food groups
+- no differences
+```{r}
+# Prep the subsets to use
+aes_pe_core.nc_aap <- aes_pe_core %>% filter(clz!="clz")
+# comparison - NC to SCZ
+aes_pe_core.cr_cnr <- aes_pe_core %>% filter(clz!="no_clz")
+aes_pe_core.aap_clz <- aes_pe_core %>% filter(participant_group!="NC")
+
+
+# Perform operations
+## p.value
+aes_pe_core_nc_aap.p <- var.test(pecore ~ participant_group, data = aes_pe_core.nc_aap)$p.value
+aes_pe_core_nc_scz.p <- var.test(pecore ~ scz, data = aes_pe_core)$p.value
+aes_pe_core_cr_cnr.p <- var.test(pecore ~ participant_group, data = aes_pe_core.cr_cnr)$p.value
+aes_pe_core_aap_clz.p <- var.test(pecore ~ clz, data = aes_pe_core.aap_clz)$p.value
+
+## ratio of variances
+aes_pe_core_nc_aap.r <- var.test(pecore ~ participant_group, data = aes_pe_core.nc_aap)$estimate
+aes_pe_core_nc_scz.r <- var.test(pecore ~ scz, data = aes_pe_core)$estimate
+aes_pe_core_cr_cnr.r <- var.test(pecore ~ participant_group, data = aes_pe_core.cr_cnr)$estimate
+aes_pe_core_aap_clz.r <- var.test(pecore ~ clz, data = aes_pe_core.aap_clz)$estimate
+
+
+pecorevar_out <- cbind(rbind(aes_pe_core_nc_aap.p, aes_pe_core_nc_scz.p, aes_pe_core_cr_cnr.p, aes_pe_core_aap_clz.p),
+                       rbind(aes_pe_core_nc_aap.r, aes_pe_core_nc_scz.r, aes_pe_core_cr_cnr.r, aes_pe_core_aap_clz.r))
+colnames(pecorevar_out) <- c("p", "ratio_variances")
+datatable(pecorevar_out, rownames = TRUE, filter="top", options = list(pageLength = 10, scrollX=T) )
+
+```
+
+## 7.3.2.4 PCA plot
+
+```{r}
+aes_pe_core.pca <- prcomp(aes_pe_core[,c("pecore", "penoncore","age")], center = T, scale = T)
+aes_pe_core.ind <- aes_pe_core$participant_group
+ggbiplot::ggbiplot(aes_pe_core.pca, groups=aes_pe_core.ind)
+```
+
+### 7.3.3 By food group
+- proportion of energy gained from each food group
+- veg, fruit, meat, protein alternatives, grains, dairy (healthy/core)
+- drink, snack, confectionery, baked products, takeaway, condiments and fatty meats (unhealthy/noncore)
+
+
+
+#### 7.3.3.1 Graphs
+```{r}
+# Subset
+aes_pe_13 <- aes_demo %>% dplyr::select(participant_id, participant_group,clz, scz, sex, age, peveg, pefruit, pemeat, pealt, pegrains, pedairy, pesweet_drink, pepack_snack, peconfect, pebaked_products, petakeaway, pecondiments, pefatty_meats) # pe food
+
+aes_pe_13[,6:ncol(aes_pe_13)] <- sapply(aes_pe_13[,6:ncol(aes_pe_13)], as.numeric)
+
+# Show the table
+datatable(aes_pe_13, rownames = FALSE, filter="top", options = list(pageLength = 10, scrollX=T))
+
+# Correlation plot
+correlations <- cor(aes_pe_13[,c(6:ncol(aes_pe_13))]) 
+corrplot(correlations, order = "hclust", method = "circle")
+
+# Distributions of continuous variables
+y <- as.factor(aes_pe_13$participant_group)
+x <- aes_pe_13[,c(6:ncol(aes_pe_13))]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=x, y=y, plot="density", scales=scales, auto.key=list(columns=3))
+
+# Box and whisker plot
+aes_pe_13.long <- melt(aes_pe_13, id.vars=c("participant_group"), measure.vars=c(7:ncol(aes_pe_13)), variable.name="specific_food")
+colnames(aes_pe_13.long) <- c("group", "specific_food", "prop_energy")
+aes_pe_13.gg <- ggplot(aes_pe_13.long, aes(x=specific_food, y=prop_energy, colour=group)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+aes_pe_13.gg
+
+```
+
+#### 7.3.3.2 Compare groups: log regression
+- https://www.datacamp.com/tutorial/logistic-regression-R
+ - difference in sugar levels between NC and AAP
+ - difference in fibre, sugar and cholesterol between NC and SCZ
+ - difference in cholesterol between CR and CNR
+ 
+#### 7.3.3.2.1 NC to AAP
+ - no differences
+```{r}
+# logistic regression comparing NC and AAP
+aes_pe_13_lm_nc_aap.df <- aes_pe_13 %>%  
+  filter(clz != "clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_pe_spec_nc_aap <- glm(participant_group~., data=aes_pe_13_lm_nc_aap.df, family = binomial)
+summary(glm_pe_spec_nc_aap)
+
+glm.probs <- predict(glm_pe_spec_nc_aap,type = "response")
+glm.probs[1:5]
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_spec_nc_aap), confint(glm_pe_spec_nc_aap)))
+
+```
+#### 7.3.3.2.2 NC to SCZ
+- small differences in dairy consumption
+```{r}
+# logistic regression comparing NC and SCZ
+aes_pe_13_lm_nc_scz.df <- aes_pe_13 %>% 
+    mutate(scz=as.factor(scz)) %>%
+    dplyr::select(- participant_id, -clz, -participant_group) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(sex=as.factor(sex))
+glm_pe_spec_nc_scz <- glm(scz~., data=aes_pe_13_lm_nc_scz.df, family = binomial)
+summary(glm_pe_spec_nc_scz)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_spec_nc_scz), confint(glm_pe_spec_nc_scz)))
+
+```
+
+#### 7.3.3.2.3 CR to CNR
+- nominal difference in bmi
+```{r}
+# logistic regression comparing CR and CNR
+aes_pe_13_lm_cr_cnr.df <- aes_pe_13 %>%  
+  filter(clz != "no_clz") %>%
+    dplyr::select(- participant_id, -clz, -scz) %>%
+    filter_all(any_vars(.!=0)) %>%
+    mutate(participant_group=as.factor(participant_group)) %>%
+    mutate(sex=as.factor(sex))
+glm_pe_spec_cr_cnr <- glm(participant_group~., data=aes_pe_13_lm_cr_cnr.df, family = binomial)
+summary(glm_pe_spec_cr_cnr)
+
+# Calculate odds ratios
+exp(cbind(OR = coef(glm_pe_spec_cr_cnr), confint(glm_pe_spec_cr_cnr)))
+```
+#### 7.3.3.3 Variances test for differences in mean + differences in variation in core food groups
+- no differences
+```{r eval=FALSE}
+
+# Prep variables to test
+qvar <- colnames(aes_pe_13)[7:ncol(aes_pe_13)]
+qvar_form <- paste(qvar, "~participant_group")
+
+# Prep the subsets to use
+aes_pe_13.nc_aap <- aes_pe_13 %>% filter(clz!="clz")
+# comparison - NC to SCZ
+aes_pe_13.cr_cnr <- aes_pe_13 %>% filter(clz!="no_clz")
+aes_pe_13.aap_clz <- aes_pe_13 %>% filter(participant_group!="NC")
+
+
+# Perform operations
+## p.value
+qvar_nc_aap.p <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.nc_aap)$p.value)), digits = 3)
+qvar_nc_scz.p <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.nc_scz)$p.value)), digits = 3)
+qvar_cr_cnr.p <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.cr_cnr)$p.value)), digits = 3)
+qvar_aap_clz.p <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.aap_clz)$p.value)), digits = 3)
+
+## ratio of variances
+qvar_nc_aap.r <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.nc_aap)$estimate)), digits = 3)
+qvar_nc_scz.r <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.nc_scz)$estimate)), digits = 3)
+qvar_cr_cnr.r <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.cr_cnr)$estimate)), digits = 3)
+qvar_aap_clz.r <- signif(unlist(lapply(1:length(qvar_form), function(x)
+  var.test(as.formula(qvar_form[x]), data = aes_pe_13.aap_clz)$estimate)), digits = 3)
+
+qvar_out <- cbind(rbind(qvar_nc_aap.p, qvar_nc_scz.p, qvar_cr_cnr.p, aqvar_aap_clz.p),
+                       rbind(qvar_nc_aap.r, qvar_nc_scz.r, qvar_cr_cnr.r, qvar_aap_clz.r))
+rownames(qvar_out) <- qvar
+datatable(qvar_out, rownames = TRUE, filter="top", options = list(pageLength = 10, scrollX=T) )
+
+```
+
+#### 7.3.3.4 PCA plot
+
+```{r}
+aes_pe_13.pca <- prcomp(aes_pe_13[,c(7:ncol(aes_pe_13))], center = T, scale = T)
+aes_pe_13.ind <- aes_pe_13$participant_group
+ggbiplot::ggbiplot(aes_pe_13.pca, groups=aes_pe_13.ind, ellipse=TRUE)
+
+# PCA with mixomics
+tune.pca.pe<-tune.pca(aes_pe_13[,c(7:ncol(aes_pe_13))], ncomp=3, scale = TRUE)
+plot(tune.pca.pe)
+tune.pca.pe$prop_expl_var$X
+tune.pca.pe$cum.var
+head(selectVar(tune.pca.pe, comp = 1)$value)
+
+# Plot PCA components 1 and 2
+plotIndiv(tune.pca.pe,
+          comp = c(1, 2),   # Specify components to plot
+          ind.names = TRUE, # Show row names of samples
+          group = aes_pe_13$participant_group,
+          ellipse = TRUE, 
+          title = 'AES food pe for TRS-BIOME, PCA comp 1 - 2',
+          legend = TRUE, legend.title = 'Participant Group')
+
+```
+
+# Save progress
+```{r}
+save.image("clinical_trs_03.06.22.Rdata")
+#load("clinical_trs_03.06.22.Rdata")
+
+```

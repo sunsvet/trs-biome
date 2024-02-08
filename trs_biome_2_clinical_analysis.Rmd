@@ -1,0 +1,2070 @@
+---
+title: "TRS-BIOME analysis of clinical data"
+author: "Svetlina Vasileva"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::UQ:
+    toc: yes
+    number_sections: no
+    code_folding: hide
+  html_document:
+    toc: yes
+    toc_depth: 3
+    df_print: paged
+    number_sections: TRUE
+linkedin: "Svetlina Vasileva"
+twitter: "sunsvet23"
+mail: "s.vasileva@uq.edu.au"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Loading packages
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+library(PMCMRplus) # install.packages("PMCMRplus")
+library(ggside) # install.packages("ggside")
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(data.table)
+# library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+library(ggpubr)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(tidyverse)
+library(magrittr) # mutate_at()
+library(purrr) # map()
+library(corrplot)  # correlation plots
+#library(caret) # distribution plots for continuous variables
+library(naniar) # replace_with_na_all()
+library(seqinr) # swap()
+library(reshape2) # melt()
+library(ggfortify) # pca, but for this need quantitative data?
+library(polycor) # for polychoric correlation
+library(lattice) # for dotplot
+# install.packages("remotes")
+# remotes::install_github("easystats/report")
+library(report) # for report function to get a report for ANOVA
+library(multcomp) # for posthoc tests - Dunnett
+library(FSA) # for performing post hoc tests for non-parametric data
+library(ggstatsplot) # for adding stat tests results to plots
+library(ggbiplot) # for pca  # devtools::install_github("vqv/ggbiplot")
+library(factoextra) # for pca
+library(compositions) # for clr
+library(car) #  
+library(vegan) # 
+library(lubridate)
+library(gridExtra)
+library(mixOmics)
+library(score) # package for calculating IPAQ score 
+library(table1) # for descriptive summary statistics tables 
+library(arsenal) # for descriptive summary statistics tables 
+library(dplyr) # https://dplyr.tidyverse.org/articles/dplyr.html
+library(hrbrthemes)
+library(viridis)
+library(cowplot)
+library(moments) #for skewness function
+library(RNOmni) # for rank-normal inverse transformation (NIT)
+
+```
+
+# Loading data
+
+-   Loading data clinical data, AES and dates related to fecal sample
+    collection
+
+```{r}
+setwd("C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data")     # set working directory
+
+rm(list = ls())
+
+clinical_full_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_full_clinical_ipaq_sagis_scfa_dates_arfs_pe13_pcs.csv"     # upload full clinical data which has been cleaned (meds, ipaq, sagis, SCFAs, dates, bristol stool chart) 
+clinical_full<-read.csv(clinical_full_dir, header = T, as.is = T)
+
+#Re-order levels of participant_group 
+clinical_full$participant_group <- factor(clinical_full$participant_group, levels=c('NC', 'AAP', 'CR', 'CNR'))
+clinical_full$ipaq_pacat <- factor(clinical_full$ipaq_pacat, levels=c('Low', 'Moderate', 'High'))
+clinical_full$clz <- factor(clinical_full$clz, levels=c('no_clz', 'clz'))
+clinical_full$scz <- factor(clinical_full$scz, levels=c('nc', 'scz'))
+
+select_col <- c("MG_SampleID", "participant_id", "participant_group", "age", "sex", "bmi", "scz", "clz","stool_type_regroup", "living_situation", "smoking_status", "audit_total", "stool_type_regroup", "panss_positive_total", "panss_negative_total", "panss_general_total", "panss_total", "total_depression", "total_anxiety", "total_stress", "sofas_score", "sagis_total_burden","sagis_constipation", "sagis_diarrhea_discomfort", "ipaq_pacat", "hba1c", "fasting_glucose", "fasting_tg", "fasting_hdl", "fasting_ldl", "total_cholesterol", "cloz_level", "norcloz_level", "cloz_norcloz_ratio", "arfs", "TAP", "AAP", "metformin", "laxatives", "PPI", "SSRI", "SNIR", "other_antidepressants", "acetate_clean", "butyrate_clean", "propionate_clean", "PC1", "PC2", "PC3", "PC4")
+# create a vector with relevant column names
+clinical_select<-clinical_full %>% dplyr::select(c(select_col))    # take these columns
+
+```
+
+# Basic Demographics
+- Ethnic_origin: 
+  1 = White/Caucasian           
+  2 = Indian Subcontinent (e.g. India, Pakistan)
+  3 = Asian, other than Indian Subcontinent      
+  4 = Australian Aboriginal or Torres Strait Islander
+  5 = New Zealand Maori / Pacific Islander
+  6 = Other: Specify___________________________
+ 
+
+## Age {.tabset}
+
+-   normally distributed
+-   No significant differences in age between NC and SCZ AND CR and CNR
+-   Small differences between AAP and CLZ (p=0.02)
+
+### Age (4 groups)
+```{r}
+# Age (4 groups)
+ggplot(data=clinical_full, aes(x=age)) +
+  geom_density()
+age1<-ggplot(data=clinical_full, aes(x=age, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$age)
+ggqqplot(clinical_full$age) # normal
+shapiro.test(clinical_full$age) # normal
+```
+
+### Age (NC vs SCZ)
+
+```{r}
+age2<-ggplot(data=clinical_full, aes(x=age, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(age[scz == "scz"])) # p = 0.44
+  with(clinical_full, shapiro.test(age[scz == "nc"])) # p = 0.18
+  # Check equal variances assumed (F-test)
+  var.test(age ~ scz, data = clinical_full)
+  # T-test
+  t.test(age ~ scz, data = clinical_full, var.equal = TRUE)
+```
+
+### Age (AAP vs CLZ)
+
+```{r}
+age3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=age, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(age[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(age[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(age ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(age ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal = TRUE) # p=0.01
+```
+
+### Age (CR vs CNR)
+
+```{r}
+age4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=age, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(age[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(age[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(age ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(age ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots
+
+```{r}
+plot_grid(age1,age2,age3,age4)
+```
+
+## BMI {.tabset}
+
+-   bmi is not normally dsitributed for whole sample, SCZ group, and CLZ
+    group and CR groups in the three different compariusons respectively
+-   no sig differences between groups with Mann Whitney test for NC vs
+    SCZ & AAP vs CLZ
+-   difference in bmi between CR and CNR (p=0.014)
+
+### BMI_int (4 groups)
+
+- More about INTs [https://cran.r-project.org/web/packages/RNOmni/vignettes/RNOmni.html]
+```{r}
+ggplot(data=clinical_full, aes(x=bmi, group=participant_group, color=participant_group)) +
+  geom_density()
+
+
+range(clinical_full$bmi)
+ggqqplot(clinical_full$bmi) # not normal
+shapiro.test(clinical_full$bmi) # not normal
+
+# Rank-based inverse normal transformation (INT)
+clinical_full$bmi_int<-RankNorm(clinical_full$bmi)
+ggplot(data=clinical_full, aes(x=bmi_int)) +
+  geom_density()
+ggqqplot(clinical_full$bmi_int) # normal
+
+
+bmi_int1<-ggplot(data=clinical_full, aes(x=bmi_int, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$bmi_int)
+ggqqplot(clinical_full$bmi_int) #  normal
+shapiro.test(clinical_full$bmi_int) #  normal
+
+```
+
+### bmi_int (NC vs SCZ)
+- difference 
+```{r}
+bmi_int2<-ggplot(data=clinical_full, aes(x=bmi_int, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # T test
+  t.test(bmi_int ~ scz, data = clinical_full)
+```
+
+### bmi_int (AAP vs CLZ)
+- no difference 
+```{r}
+bmi_int3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=bmi_int, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bmi_int[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bmi_int[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(bmi_int ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # Welsch test
+  t.test(bmi_int ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal = FALSE)
+```
+
+### bmi_int (CR vs CNR)
+-  difference
+```{r}
+bmi_int4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=bmi_int, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bmi_int[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bmi_int[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(bmi_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T test
+  t.test(bmi_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots for original and int
+```{r}
+
+bmi_1<-ggplot(data=clinical_full, aes(x=bmi, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+
+bmi_2<-ggplot(data=clinical_full, aes(x=bmi, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+
+bmi_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=bmi, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+
+bmi_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=bmi, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+
+plot_grid(bmi_1,bmi_2,bmi_3,bmi_4)
+```
+
+```{r}
+plot_grid(bmi_int1,bmi_int2,bmi_int3,bmi_int4)
+```
+### BMI regroup into categorical
+- 'healthy_weight','overweight_and_obese','very_obese'--> 1,2,3
+
+```{r}
+#regroup BMI data
+clinical_full$bmi_cat<-cut(clinical_full$bmi, 
+                             breaks=c(19, 25, 30, 35, 60),
+                             labels=c('healthy_weight','overweight','obese','very_obese'))
+table(clinical_full$bmi_cat,clinical_full$participant_group)
+clinical_full$bmi_cat<-as.numeric(clinical_full$bmi_cat)
+
+ggplot(clinical_full, aes (x=bmi_cat, fill=participant_group)) +
+  geom_bar() +
+  scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A"))
+
+
+```
+
+## Stool type {.tabset}
+
+-   no sig. differences NC vs AAP & CR vs CNR
+-   sig. differences between AAP and CLZ (p=0.005)
+-   ordinal data -\> mann whitney tutorial
+    [<https://stat-methods.com/home/mann-whitney-u-r/>]
+    
+### stool_type (4 groups)
+
+```{r}
+stool1<-ggplot(data=clinical_full, aes(x=stool_type, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+```
+
+### stool_type (NC vs SCZ)
+
+```{r}
+stool2<-ggplot(data=clinical_full, aes(x=stool_type, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+```
+
+### stool_type (AAP vs CLZ)
+
+```{r}
+stool3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=stool_type, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+
+```
+
+### stool_type (CR vs CNR)
+
+```{r}
+stool4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=stool_type, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+```
+
+### Plots
+
+```{r}
+
+plot_grid(stool1,stool2,stool3,stool4)
+
+# Bar plot for stool_type
+ggplot(clinical_full, aes (x=factor(stool_type), fill=participant_group)) +
+  geom_bar() +
+  scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A"))
+```
+## stool_type_regroup
+- 4 and 5 are collapsed
+### stool_type_regroup (4 groups)
+
+```{r}
+stool1<-ggplot(data=clinical_full, aes(x=stool_type_regroup, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+ggqqplot(clinical_full$stool_type_regroup) # not normal
+```
+
+### stool_type_regroup (NC vs SCZ)
+
+```{r}
+stool2<-ggplot(data=clinical_full, aes(x=stool_type_regroup, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Man Whitney test
+  wilcox.test(stool_type_regroup ~ scz, data = clinical_full, exact=FALSE)
+```
+
+### stool_type_regroup (AAP vs CLZ)
+
+```{r}
+stool3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=stool_type_regroup, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+
+  # Mann Whitney test
+  wilcox.test(stool_type_regroup ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### stool_type_regroup (CR vs CNR)
+
+```{r}
+stool4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=stool_type_regroup, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Wilcox test
+  wilcox.test(stool_type_regroup ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+- 5 and 6 are collapsed
+
+```{r}
+
+plot_grid(stool1,stool2,stool3,stool4)
+
+# Bar plot for stool_type
+ggplot(clinical_full, aes (x=factor(stool_type_regroup), fill=participant_group)) +
+  geom_bar() +
+  scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A"))
+```
+
+## Sex {.tabset}
+
+-   no sig differences between groups (~AAP vs CLZ, p=0.06)
+
+### Chi squared for sex (NC vs SCZ)
+
+```{r}
+table(clinical_full$scz,clinical_full$sex)
+chisq.test(clinical_full$scz,clinical_full$sex, correct = FALSE)
+sex1<-ggplot(clinical_full, aes(x=scz, fill=sex)) +
+  geom_bar(width=0.80, position="fill") +   # percentage 
+  labs(x = "NC vs SCZ",y="Count", fill = "Sex") +
+  theme(text = element_text(size = 10))  +
+  theme(legend.title = element_text(size = 10)) +
+  theme(legend.text = element_text(size = 8)) +
+  theme(legend.position = "top") +
+    scale_y_continuous(labels = scales::percent)
+```
+
+### Chi squared for sex (AAP vs CLZ)
+
+```{r}
+table(subset(clinical_full, scz %in% "scz")$clz,subset(clinical_full, scz %in% "scz")$sex)
+chisq.test(subset(clinical_full, scz %in% "scz")$clz,subset(clinical_full, scz %in% "scz")$sex, correct = FALSE)
+sex2<-ggplot(subset(clinical_full, scz %in% "scz"), aes(x=clz, fill=sex)) +
+  geom_bar(width=0.80, position="fill") +   # percentage 
+  labs(x = "AAP vs CLZ",y="Count", fill = "Sex") +
+  theme(text = element_text(size = 10))  +
+  theme(legend.title = element_text(size = 10)) +
+  theme(legend.text = element_text(size = 8)) +
+  theme(legend.position = "top") +
+    scale_y_continuous(labels = scales::percent)
+```
+
+### Chi squared for sex (CR vs CNR)
+
+```{r}
+table(subset(clinical_full, clz %in% "clz")$participant_group,subset(clinical_full, clz %in% "clz")$sex)
+chisq.test(subset(clinical_full, clz %in% "clz")$participant_group,subset(clinical_full, clz %in% "clz")$sex, correct = FALSE)
+sex3<-ggplot(subset(clinical_full, clz %in% "clz"), aes(x=participant_group, fill=sex)) +
+  geom_bar(width=0.80, position="fill") +   # percentage 
+  labs(x = "CR vs CNR",y="Count", fill = "Sex") +
+  theme(text = element_text(size = 10))  +
+  theme(legend.title = element_text(size = 10)) +
+  theme(legend.text = element_text(size = 8)) +
+  theme(legend.position = "top") +
+    scale_y_continuous(labels = scales::percent)
+```
+
+### Plot
+
+```{r}
+plot_grid(sex1,sex2,sex3)
+```
+
+# Cardiovascular measures
+
+
+## BP_sit_systolic {.tabset}
+
+-   95-190 (normal <120/130)
+-   bp_sit_systolic is not normally distributed \
+-   small difference in bp_sit_systolic between CR and CNR (p=0.05), difference between NC and SCZ
+
+### bp_sit_systolic (4 groups)
+
+```{r}
+ggplot(data=clinical_full, aes(x=bp_sit_systolic)) +
+  geom_density()
+bp_sit_systolic1<-ggplot(data=clinical_full, aes(x=bp_sit_systolic, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$bp_sit_systolic)
+ggqqplot(clinical_full$bp_sit_systolic) # not normal
+shapiro.test(clinical_full$bp_sit_systolic) # not normal
+```
+
+### bp_sit_systolic (NC vs SCZ)
+
+```{r}
+bp_sit_systolic2<-ggplot(data=clinical_full, aes(x=bp_sit_systolic, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(bp_sit_systolic[scz == "scz"])) # not normal
+  with(clinical_full, shapiro.test(bp_sit_systolic[scz == "nc"])) 
+  # Wilcox test
+  wilcox.test(bp_sit_systolic ~ scz, data = clinical_full, paired=FALSE)
+```
+
+### bp_sit_systolic (AAP vs CLZ)
+
+```{r}
+bp_sit_systolic3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=bp_sit_systolic, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bp_sit_systolic[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bp_sit_systolic[clz == "no_clz"])) 
+  # Wilcox test
+  wilcox.test(bp_sit_systolic ~ clz, data = subset(clinical_full, scz %in% "scz"))
+```
+
+### bp_sit_systolic (CR vs CNR)
+
+```{r}
+bp_sit_systolic4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=bp_sit_systolic, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bp_sit_systolic[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bp_sit_systolic[participant_group == "CNR"]))
+  # Wilcox test
+  wilcox.test(bp_sit_systolic ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+```
+
+### Plots
+
+```{r}
+plot_grid(bp_sit_systolic1,bp_sit_systolic2,bp_sit_systolic3,bp_sit_systolic4)
+```
+
+## bp_sit_diastolic {.tabset}
+
+-   60-110 (normal <80)
+-   binomial distribution  
+-   small difference in bp_sit_diastolic between CR and CNR (p=0.05), difference between NC and SCZ
+
+### bp_sit_diastolic (4 groups)
+
+```{r}
+ggplot(data=clinical_full, aes(x=bp_sit_diastolic)) +
+  geom_density()
+bp_sit_diastolic1<-ggplot(data=clinical_full, aes(x=bp_sit_diastolic, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$bp_sit_diastolic)
+ggqqplot(clinical_full$bp_sit_diastolic) # not normal
+shapiro.test(clinical_full$bp_sit_diastolic) # not normal
+```
+
+### bp_sit_diastolic (NC vs SCZ)
+
+```{r}
+bp_sit_diastolic2<-ggplot(data=clinical_full, aes(x=bp_sit_diastolic, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(bp_sit_diastolic[scz == "scz"])) # not normal
+  with(clinical_full, shapiro.test(bp_sit_diastolic[scz == "nc"])) 
+  # Wilcox test
+  wilcox.test(bp_sit_diastolic ~ scz, data = clinical_full, paired=FALSE)
+```
+
+### bp_sit_diastolic (AAP vs CLZ)
+  
+```{r}
+bp_sit_diastolic3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=bp_sit_diastolic, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bp_sit_diastolic[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(bp_sit_diastolic[clz == "no_clz"])) 
+  # Wilcox test
+  wilcox.test(bp_sit_diastolic ~ clz, data = subset(clinical_full, scz %in% "scz"))
+```
+
+### bp_sit_diastolic (CR vs CNR)
+  
+```{r}
+bp_sit_diastolic4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=bp_sit_diastolic, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bp_sit_diastolic[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(bp_sit_diastolic[participant_group == "CNR"]))
+  # Wilcox test
+  wilcox.test(bp_sit_diastolic ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+```
+
+### Plots
+
+```{r}
+plot_grid(bp_sit_diastolic1,bp_sit_diastolic2,bp_sit_diastolic3,bp_sit_diastolic4)
+```
+
+# Clinical measures: SAGIS
+
+## Sagis_total_burden {.tabset}
+
+-   data is not normally distributed --> Mann Whitney test
+-   sig. differences between NC vs SCZ & AAP vs CLZ
+-   no diff. between CR and CNR
+
+### Density plot of all data and skewness
+
+```{r}
+ggplot(clinical_full, aes (x=sagis_total_burden)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$sagis_total_burden)
+```
+
+### sagis_total_burden (4 groups)
+
+```{r}
+stb1<-ggplot(data=clinical_full, aes(x=sagis_total_burden, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$sagis_total_burden)
+ggqqplot(clinical_full$sagis_total_burden) 
+shapiro.test(clinical_full$sagis_total_burden) 
+```
+
+### sagis_total_burden (NC vs SCZ)
+
+```{r}
+stb2<-ggplot(data=clinical_full, aes(x=sagis_total_burden, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(sagis_total_burden[scz == "scz"])) 
+  with(clinical_full, shapiro.test(sagis_total_burden[scz == "nc"])) 
+  # Wilcox-test
+  wilcox.test(sagis_total_burden ~ scz, data = clinical_full)
+```
+
+### sagis_total_burden (AAP vs CLZ)
+  
+```{r}
+stb3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=sagis_total_burden, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_total_burden[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_total_burden[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(sagis_total_burden ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### sagis_total_burden (CR vs CNR)
+```{r}
+stb4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=sagis_total_burden, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_total_burden[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_total_burden[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(sagis_total_burden ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+
+```{r}
+plot_grid(stb1,stb2,stb3,stb4)
+```
+
+## Sagis_constipation {.tabset}
+ 
+-   constipation + difficulty defecating (0-8, >3 moderate)
+-   data is not normally distributed
+-   sig. diff between AAP and CLZ
+-   no diff. NC vs SCZ & CR and CNR
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=sagis_constipation)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$sagis_constipation)
+```
+
+### sagis_constipation (4 groups)
+```{r}
+sc1<-ggplot(data=clinical_full, aes(x=sagis_constipation, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$sagis_constipation)
+ggqqplot(clinical_full$sagis_constipation) # not normal
+shapiro.test(clinical_full$sagis_constipation) # not normal
+```
+
+### sagis_constipation (NC vs SCZ)
+```{r}
+sc2<-ggplot(data=clinical_full, aes(x=sagis_constipation, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(sagis_constipation[scz == "scz"])) 
+  with(clinical_full, shapiro.test(sagis_constipation[scz == "nc"])) 
+  # Wilcox-test
+  wilcox.test(sagis_constipation ~ scz, data = clinical_full, exact = FALSE)
+```
+
+### sagis_constipation (AAP vs CLZ)
+```{r}
+sc3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=sagis_constipation, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_constipation[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_constipation[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(sagis_constipation ~ clz, data = subset(clinical_full, scz %in% "scz"), exact = FALSE)
+```
+
+### sagis_constipation (CR vs CNR)
+```{r}
+sc4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=sagis_constipation, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_constipation[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_constipation[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(sagis_constipation ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact = FALSE)
+```
+
+### Plots
+
+```{r}
+plot_grid(sc1,sc2,sc3,sc4)
+
+```
+
+## Sagis_diarrhea_discomfort {.tabset}
+
+-   score 0-20
+-   data is not normally distributed
+-   sig. diff for NC vs SCZ (p=0.002)
+-   no sig. difference for AAP vs CLZ & CR vs CNR
+
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=sagis_diarrhea_discomfort)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$sagis_diarrhea_discomfort)
+```
+
+### sagis_diarrhea_discomfort (4 groups)
+```{r}
+sdd1<-ggplot(data=clinical_full, aes(x=sagis_diarrhea_discomfort, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$sagis_diarrhea_discomfort)
+ggqqplot(clinical_full$sagis_diarrhea_discomfort) # normal
+shapiro.test(clinical_full$sagis_diarrhea_discomfort) # normal
+```
+
+### sagis_diarrhea_discomfort (NC vs SCZ)
+```{r}
+sdd2<-ggplot(data=clinical_full, aes(x=sagis_diarrhea_discomfort, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(sagis_diarrhea_discomfort[scz == "scz"])) 
+  with(clinical_full, shapiro.test(sagis_diarrhea_discomfort[scz == "nc"])) 
+  # Wilcox-test
+  wilcox.test(sagis_diarrhea_discomfort ~ scz, data = clinical_full, exact=FALSE)
+```
+
+### sagis_diarrhea_discomfort (AAP vs CLZ)
+```{r}
+sdd3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=sagis_diarrhea_discomfort, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_diarrhea_discomfort[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(sagis_diarrhea_discomfort[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(sagis_diarrhea_discomfort ~ clz, data = subset(clinical_full, scz %in% "scz"), exact= FALSE)
+```
+
+### sagis_diarrhea_discomfort (CR vs CNR)
+```{r}
+sdd4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=sagis_diarrhea_discomfort, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_diarrhea_discomfort[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(sagis_diarrhea_discomfort[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(sagis_diarrhea_discomfort ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(sagis_diarrhea_discomfort ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+  # Wilcox-test
+  wilcox.test(sagis_diarrhea_discomfort ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact = FALSE)
+```
+
+### Plots
+```{r}
+plot_grid(sdd1,sdd2,sdd3,sdd4)
+```
+## Sagis_10: Constiption only {.tabset}
+
+-   score is between 0-4 (no problem, mild, moderate, severe, very severe) 
+-   data is not normally distributed
+-   sig. diff for NC vs SCZ (p=0.002)
+-   no sig. difference for AAP vs CLZ & CR vs CNR
+
+### Bar plot of all data
+```{r}
+# All groups
+clinical_full$sagis_10<-as.factor(clinical_full$sagis_10)
+ggplot(clinical_full, aes(x = participant_group, fill = sagis_10)) + 
+  geom_bar()
+
+# CR vs CNR
+ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=sagis_10, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+
+clinical_full$sagis_constipation_only <- NA
+clinical_full$sagis_10<-as.numeric(clinical_full$sagis_10)
+unique(clinical_full$sagis_10)
+clinical_full$sagis_constipation_only <- ifelse(clinical_full$sagis_10 >2, "1", "0")
+clinical_full$sagis_constipation_only<-as.factor(clinical_full$sagis_constipation_only)
+ggplot(clinical_full, aes(x = participant_group, fill = sagis_constipation_only)) + 
+  geom_bar()
+
+```
+
+### sagis_10 (CR vs CNR)
+- no difference in constipation between groups
+```{r}
+clinical_full$sagis_10<-as.numeric(clinical_full$sagis_10)
+  # Wilcox-test
+  wilcox.test(sagis_10 ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact = FALSE)
+```
+
+### Plots
+```{r}
+plot_grid(sdd1,sdd2,sdd3,sdd4)
+```
+
+# Clinial measures: IPAQ_met {.tabset}
+
+-   not normally distributed
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=ipaq_met)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$ipaq_met)
+
+ggplot
+```
+
+### ipaq_met (4 groups)
+```{r}
+ipaq_met1<-ggplot(data=clinical_full, aes(x=ipaq_met, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$ipaq_met)
+ggqqplot(clinical_full$ipaq_met) # normal
+shapiro.test(clinical_full$ipaq_met) # normal
+```
+
+### ipaq_met (NC vs SCZ)
+```{r}
+ipaq_met2<-ggplot(data=clinical_full, aes(x=ipaq_met, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality
+  with(clinical_full, shapiro.test(ipaq_met[scz == "scz"])) 
+  with(clinical_full, shapiro.test(ipaq_met[scz == "nc"])) 
+  # Check equal variances assumed
+  var.test(ipaq_met ~ scz, data = clinical_full)
+  # T-test
+  t.test(ipaq_met ~ scz, data = clinical_full, var.equal = TRUE)
+```
+
+### ipaq_met (AAP vs CLZ)
+```{r}
+ipaq_met3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=ipaq_met, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(ipaq_met[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(ipaq_met[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(ipaq_met ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(ipaq_met ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal = TRUE)
+```
+
+### ipaq_met (CR vs CNR)
+```{r}
+ipaq_met4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=ipaq_met, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(ipaq_met[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(ipaq_met[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(ipaq_met ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(ipaq_met ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots
+
+```{r}
+plot_grid(ipaq_met1,ipaq_met2,ipaq_met4,ipaq_met4)
+```
+
+# Clinical measures from self-report Qaires
+ - nill (0), past (1), current (2)
+
+```{r}
+clinical_full$gi_system<-as.factor(clinical_full$gi_system)
+gi<-ggplot(clinical_full, aes(x = participant_group, fill = gi_system)) + 
+  geom_bar()
+table(clinical_full$participant_group,clinical_full$gi_system)
+
+clinical_full$nervous_system<-as.factor(clinical_full$nervous_system)
+ns<-ggplot(clinical_full, aes(x = participant_group, fill = nervous_system)) + 
+  geom_bar()
+
+clinical_full$cardiovascular_system<-as.factor(clinical_full$cardiovascular_system)
+cvs<-ggplot(clinical_full, aes(x = participant_group, fill = cardiovascular_system)) + 
+  geom_bar()
+
+clinical_full$allergies<-as.factor(clinical_full$allergies)
+allergy<-ggplot(clinical_full, aes(x = participant_group, fill = allergies)) + 
+  geom_bar()
+
+plot_grid(gi, ns, cvs, allergy)
+```
+
+# Metabolic investigations of people with SCZ
+
+- BMI (n=97): 19.1-52.6 (healthy: 18-25, overweight: 25-30, obese: 30-35, very obese: > 35) 
+- hba1c: 4.1-9.3 (normal: < 5.7, pre-diabetes 5.7-6.4, diabetes: > 6.5) 
+- fasting_glucose: 3.8-11.2 (normal: <5.6 mmol/L,prediabetes: 5.6-6.9, diabetes: >7.0)
+- total_cholesterol: 2.4-6.6 (normal 3.9 - 5.5 mmol/L, ) 
+- triglycerides: 0.5-6.8 (normal: 0.5 - 1.7mmol/L, high: 2.3-5.6, very high: >5.6) 
+- HDL: 0.54 - 2.29 (desirable: > 1.6 mmol/L, at risk: men <1.0, women <1.3) 
+- LDL: 0.68 - 5.20 (normal: 1.7 -3.5 mmol/L, high: > 4.5 mmol/L ) 
+- platelets: 62-388 (normal 150-450, thrombocytopenia: < 150) 
+- neutrophils:  0.7 - 10.7 (normal: 2.5-7.0, neutropenia: <2.5, neutrophilia: >7.0)
+
+## Metabolic syndrome classification
+- Tso et al. 2016, IDF definition: for a person to be defined as having MetS, they must have:
+  - Central obesity: waist circumference >=94cm for males (>=90 for Asian males) and >=80 for females
+  - Plus any 2 of the following factors:
+    - raised TG levels (>=1.7 mmol/L) or treatment for this anomaly
+    - reduced HDL levels (<1.03 mmol/L in males and <1.29 mmol/L in females)
+    - raised BP (systolic >=130 mm Hg or diastolic >=85 mm Hg) - use sitting
+    - raised fasting plasma glucose (>=5.6 mmol/L)
+
+*I have manually categorized people into MetS (1), no MetS (0) or NA (not enough data available) with 4 distinct variables extracted:*
+ - mets_5: based on the 5 measures;
+ - mets_5_notes: based on the 5 measures + incorporating medication and diabetes diagnosis data;
+ - mets_2: elevated blood pressure and waist circumference - 1, otherwise - 0
+ - mets_3: MetS based on waist circumference and BP only; 0 - waist circumference within limits; 1- waist circumference above limits, but BP within; 2- both BP and WC above limits=MetS; 
+
+
+```{r}
+# extract relevant columns: 
+mets<-clinical_full %>% dplyr::select(c(participant_id, participant_group, ethnic_origin, sex, waist_circumference, bmi, fasting_tg, fasting_hdl, bp_stand_systolic, bp_stand_diastolic,bp_sit_systolic, bp_sit_diastolic, fasting_glucose))
+
+ggplot(mets,aes(waist_circumference))+stat_bin(breaks=seq(0, 200, 5))+geom_vline(xintercept=94,linetype="dotted")
+ggplot(mets,aes(fasting_tg))+stat_bin(breaks=seq(0, 8, 0.5))+geom_vline(xintercept=1.7,linetype="dotted")
+ggplot(mets,aes(fasting_hdl))+stat_bin(breaks=seq(0, 3, 0.2))+geom_vline(xintercept=1.03,linetype="dotted")
+ggplot(mets,aes(bp_stand_systolic))+stat_bin(breaks=seq(70, 175, 10))+geom_vline(xintercept=130,linetype="dotted")
+ggplot(mets,aes(bp_stand_diastolic))+stat_bin(breaks=seq(50, 100, 5))+geom_vline(xintercept=85,linetype="dotted")
+ggplot(mets,aes(fasting_glucose))+stat_bin(breaks=seq(3, 12, .5))+geom_vline(xintercept=5.6,linetype="dotted")
+
+
+```
+
+```{r}
+# MetS categorizing 
+
+mets1<-mets %>%
+  mutate(waist_circumference_c = case_when(sex=="male" & ethnic_origin == 1 & waist_circumference >= 94 ~ 1,
+                                           sex=="male" & ethnic_origin >= 2 & waist_circumference >= 90 ~ 1, 
+                                           sex=="female" & waist_circumference>=80 ~ 1)) %>% 
+  mutate(fasting_hdl_c = case_when(sex=="male" & fasting_hdl <= 1.03 ~ 1,
+                                   sex=="female" & fasting_hdl <= 1.29 ~ 1)) %>%
+  mutate(fasting_tg_c = case_when(fasting_tg >=1.7 ~ 1)) %>%
+  mutate(fasting_glucose_c = case_when(fasting_glucose >=5.6 ~ 1)) %>%
+  mutate(bp_stand_c = case_when(bp_stand_systolic >=130 | bp_stand_diastolic >=85 ~ 1)) %>% 
+  mutate(bp_sit_c = case_when(bp_sit_systolic >=130 | bp_sit_diastolic >=85 ~ 1)) %>%
+  mutate_at(c("waist_circumference_c", "fasting_hdl_c", "fasting_tg_c", "fasting_glucose_c","bp_stand_c", "bp_sit_c"), ~replace_na(.,0)) %>% 
+  mutate(mets_5_sit = case_when(waist_circumference_c == 0 ~ 0,
+                                waist_circumference_c == 1 & (fasting_hdl_c + fasting_tg_c + fasting_glucose_c + bp_sit_c) >= 2 ~ 1,
+                                waist_circumference_c == 1 & (fasting_hdl_c + fasting_tg_c + fasting_glucose_c + bp_sit_c) < 2 ~ 0))
+# mets_5 sit and stand produce the same results
+
+
+```
+
+```{r eval=FALSE}
+mets1<-mets %>%
+  mutate(waist_circumference_c = case_when(sex=="male" & ethnic_origin == 1 & waist_circumference >= 94 ~ 1,
+                                           sex=="male" & ethnic_origin >= 2 & waist_circumference >= 90 ~ 1, 
+                                           sex=="female" & waist_circumference>=80 ~ 1)) %>% 
+  mutate(fasting_hdl_c = case_when(sex=="male" & fasting_hdl <= 1.03 ~ 1,
+                                   sex=="male" & fasting_hdl > 1.03 ~ 0,
+                                   sex=="female" & fasting_hdl <= 1.29 ~ 1,
+                                   sex=="female" & fasting_hdl > 1.29 ~ 0,
+                                   fasting_hdl == NA ~ NA)) %>%
+  mutate(fasting_tg_c = case_when(fasting_tg >=1.7 ~ 1,
+                                  fasting_tg <1.7 ~ 0,
+                                  fasting_tg == NA ~ NA)) %>%
+  mutate(fasting_glucose_c = case_when(fasting_glucose >=5.6 ~ 1,
+                                       fasting_glucose <5.6 ~ 0,
+                                       fasting_glucose == NA ~ NA)) %>%
+  mutate(bp_stand_c = case_when(bp_stand_systolic >=130 | bp_stand_diastolic >=85 ~ 1)) %>% 
+  mutate(bp_sit_c = case_when(bp_sit_systolic >=130 | bp_sit_diastolic >=85 ~ 1)) %>%
+  #mutate_at(c("waist_circumference_c", "fasting_hdl_c", "fasting_tg_c", "fasting_glucose_c","bp_stand_c", "bp_sit_c"), ~replace_na(.,0)) %>% 
+  mutate(mets_5_sit = case_when(waist_circumference_c == 0 ~ 0,
+                                waist_circumference_c == 1 & (fasting_hdl_c + fasting_tg_c + fasting_glucose_c + bp_sit_c) >= 2 ~ 1,
+                                waist_circumference_c == 1 & (fasting_hdl_c + fasting_tg_c + fasting_glucose_c + bp_sit_c) < 2 ~ 0))
+```
+
+```{r}
+
+# Extract table 
+write.csv(mets, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/tmp_files/trs_biome_full_clinical_mets.csv", row.names = F, quote = F)
+
+# Upload manually categorized MetS with new measure = mets_5_notes which incorproates medication and diagnoses from the rest of the data -> 12 more participants are categorised as having MetS
+mets_dir<-"C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/tmp_files/trs_biome_mets_manual.csv"
+mets_3<-read.csv(mets_dir, header = T)      # upload the three mets variables 
+
+# Merge MetS variables with the rest of the data
+clinical_full<-plyr::join(clinical_full, mets_3, by = "participant_id", type = "inner")
+
+# mets_5_notes
+clinical_full$mets_5_notes<-as.factor(clinical_full$mets_5_notes)
+ggplot(clinical_full, aes(x = participant_group, fill = mets_5_notes)) + 
+  geom_bar()
+
+# mets_2
+clinical_full$mets_2<-as.factor(clinical_full$mets_2)
+ggplot(clinical_full, aes(x = participant_group, fill = mets_2)) + 
+  geom_bar()
+
+# mets_3
+clinical_full$mets_3<-as.factor(clinical_full$mets_3)
+ggplot(clinical_full, aes(x = participant_group, fill = mets_3)) + 
+  geom_bar()
+
+
+```
+
+## hba1c {.tabset}
+
+-   4.1-9.3 (normal: < 5.7, pre-diabetes 5.7-6.4, diabetes: > 6.5)
+-   data is not normal
+-   data only for 50 people
+-   no differences between groups
+
+### hba1c for three SCZ groups- density plot
+```{r}
+hba1c_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=hba1c, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$hba1c, na.rm=TRUE)
+ggqqplot(clinical_full$hba1c, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$hba1c) # not normal
+```
+
+### hba1c (AAP vs CLZ)
+```{r}
+hba1c_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=hba1c, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(hba1c[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(hba1c[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(hba1c ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### hba1c (CR vs CNR)
+```{r}
+hba1c_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=hba1c, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(hba1c[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(hba1c[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(hba1c ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+```{r}
+plot_grid(hba1c_1,hba1c_2,hba1c_3)
+```
+
+## fasting_glucose {.tabset}
+
+-   data is for 64 people
+-   3.8-11.2 (normal: <5.6 mmol/L, pre-diabetes: 5.6-6.9, diabetes: >7.0)
+-   not normally distributed
+-   no differences between groups
+
+### fasting_glucose for three SCZ groups- density plot
+```{r}
+fasting_glucose_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_glucose, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$fasting_glucose, na.rm=TRUE)
+ggqqplot(clinical_full$fasting_glucose) # not normal
+shapiro.test(clinical_full$fasting_glucose) # not normal
+summary(clinical_full$fasting_glucose)
+```
+
+### fasting_glucose (AAP vs CLZ)
+```{r}
+fasting_glucose_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_glucose, group=clz, fill=clz), exact=FALSE) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_glucose[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_glucose[clz == "no_clz"]))  # normal
+  # Wilcox-test
+  wilcox.test(fasting_glucose ~ clz, data = subset(clinical_full, scz %in% "scz")) 
+```
+
+### fasting_glucose (CR vs CNR)
+```{r}
+fasting_glucose_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=fasting_glucose, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_glucose[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_glucose[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(fasting_glucose ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+  
+### Plots  
+
+```{r}
+plot_grid(fasting_glucose_1,fasting_glucose_2,fasting_glucose_3)
+
+```
+
+## total_cholesterol {.tabset}
+
+-   data is for 70 people
+-   normally distributed
+-   no differences between groups
+
+### total_cholesterol for three SCZ groups- density plot
+```{r}
+total_cholesterol_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=total_cholesterol, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$total_cholesterol, na.rm=TRUE)
+ggqqplot(clinical_full$total_cholesterol) # normal
+shapiro.test(clinical_full$total_cholesterol) # normal
+summary(clinical_full$total_cholesterol)
+```
+
+### total_cholesterol (AAP vs CLZ)
+```{r}
+total_cholesterol_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=total_cholesterol, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(total_cholesterol[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(total_cholesterol[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(total_cholesterol ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(total_cholesterol ~ clz, data = subset(clinical_full, scz %in% "scz")) # p=0.01
+```
+
+### total_cholesterol (CR vs CNR)
+```{r}
+total_cholesterol_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=total_cholesterol, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(total_cholesterol[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(total_cholesterol[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(total_cholesterol ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(total_cholesterol ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+```
+
+### Plots
+```{r}
+plot_grid(total_cholesterol_1,total_cholesterol_2,total_cholesterol_3)
+```
+
+## triglycerides {.tabset}
+
+-   0.5-6.8 (normal: < 1.7mmol/L, high: 2.3-5.6, very high: >5.6)
+-   data is not normal
+-   data for 70 people
+-   differences between AAP and CLZ (p=0.03)
+
+### triglycerides for three SCZ groups- density plot
+
+```{r}
+fasting_tg_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_tg, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$fasting_tg, na.rm=TRUE)
+ggqqplot(clinical_full$fasting_tg, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$fasting_tg) # not normal
+```
+
+### triglycerides (AAP vs CLZ)
+
+```{r}
+fasting_tg_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_tg, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_tg[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_tg[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(fasting_tg ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### triglycerides (CR vs CNR)
+
+```{r}
+fasting_tg_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=fasting_tg, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_tg[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_tg[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(fasting_tg ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+
+```{r}
+plot_grid(fasting_tg_1,fasting_tg_2,fasting_tg_3)
+```
+
+## HDL {.tabset}
+ 
+-   0.54 - 2.29 (desirable: > 1.6 mmol/L, at risk: men <1.0, women <1.3)
+-   data is not normal
+-   data for 66 people
+-   no differences between groups
+
+### HDL for three SCZ groups- density plot
+
+```{r}
+fasting_hdl_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_hdl, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$fasting_hdl, na.rm=TRUE)
+ggqqplot(clinical_full$fasting_hdl, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$fasting_hdl) # not normal
+```
+
+### HDL (AAP vs CLZ)
+
+```{r}
+fasting_hdl_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_hdl, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_hdl[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_hdl[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(fasting_hdl ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### HDL (CR vs CNR)
+
+```{r}
+fasting_hdl_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=fasting_hdl, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_hdl[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_hdl[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(fasting_hdl ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+
+```{r}
+plot_grid(fasting_hdl_1,fasting_hdl_2,fasting_hdl_3)
+```
+
+## LDL {.tabset}
+
+-   0.68 - 5.20 (normal: 1.7 -3.5 mmol/L, high: > 4.5 mmol/L )
+-   data is normal
+-   data for 65 people
+-   no differences between groups
+
+### LDL for three SCZ groups- density plot
+```{r}
+fasting_ldl_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_ldl, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$fasting_ldl, na.rm=TRUE)
+ggqqplot(clinical_full$fasting_ldl, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$fasting_ldl) # not normal
+```
+
+### LDL (AAP vs CLZ)
+```{r}
+fasting_ldl_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=fasting_ldl, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_ldl[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(fasting_ldl[clz == "no_clz"])) 
+   # Check equal variances assumed
+  var.test(fasting_ldl ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(fasting_ldl ~ clz, data = subset(clinical_full, scz %in% "scz")) 
+```
+
+### LDL (CR vs CNR)
+```{r}
+fasting_ldl_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=fasting_ldl, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_ldl[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(fasting_ldl[participant_group == "CNR"]))
+   # Check equal variances assumed
+  var.test(fasting_ldl ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(fasting_ldl ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+```
+
+### Plots
+```{r}
+plot_grid(fasting_ldl_1,fasting_ldl_2,fasting_ldl_3)
+```
+
+## Platelet {.tabset}
+
+-   62-388 (normal 150-450)
+-   data is normal
+-   data for 72 people
+-   no differences between groups
+
+### Platelet for three SCZ groups- density plot
+
+```{r}
+platelet_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=platelet, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$platelet, na.rm=TRUE)
+ggqqplot(clinical_full$platelet, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$platelet) # not normal
+```
+
+### Platelet (AAP vs CLZ)
+
+```{r}
+platelet_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=platelet, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(platelet[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(platelet[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(platelet ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(platelet ~ clz, data = subset(clinical_full, scz %in% "scz")) 
+```
+
+### Platelet (CR vs CNR)
+
+```{r}
+platelet_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=platelet, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(platelet[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(platelet[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(platelet ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(platelet ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+```
+
+### Plots
+```{r}
+plot_grid(platelet_1,platelet_2,platelet_3)
+```
+
+## Neutrophils {.tabset}
+
+-   0.7 - 10.7 (normal: 2.5-7.0, neutropenia: <2.5, neutrophilia: >7.0)
+-   data is not normally distributed
+-   data for 72 people
+-   difference between AAP and CLZ groups
+
+### Neutrophils for three SCZ groups- density plot
+```{r}
+neutrophil_1<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=neutrophil, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$neutrophil, na.rm=TRUE)
+ggqqplot(clinical_full$neutrophil, na.rm=TRUE) # not normal
+shapiro.test(clinical_full$neutrophil) # not normal
+```
+
+### Neutrophils (AAP vs CLZ)
+
+```{r}
+neutrophil_2<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=neutrophil, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(neutrophil[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(neutrophil[clz == "no_clz"])) 
+  # Wilcox-test
+  wilcox.test(neutrophil ~ clz, data = subset(clinical_full, scz %in% "scz"), exact=FALSE)
+```
+
+### Neutrophils (CR vs CNR)
+```{r}
+neutrophil_3<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=neutrophil, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(neutrophil[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(neutrophil[participant_group == "CNR"]))
+  # Wilcox-test
+  wilcox.test(neutrophil ~ participant_group, data = subset(clinical_full, clz %in% "clz"), exact=FALSE)
+```
+
+### Plots
+```{r}
+plot_grid(neutrophil_1,neutrophil_2,neutrophil_3)
+```
+
+-   blood measures for T013, T029, T033, T035, T050, T065, T072, T077,
+    T086, T091, T093, T095 were replaced with more recent measures after
+    Andrea Baker reviewed them and updated them in March 2022
+
+-   After Andrea obtained data from more recent blood and metabolic
+    measures, only participant P086 did not fall within the 6 months
+    (187 days between blood measures and stool collection) - consider
+    excluding when doing analysis with with those measures
+
+-   HbA1c: normal (4-5.6%), pre-diabetes(5.7-6.4), diabetes (\>6.5)
+
+-   Fasting plasma glucose: normal (3.9-5.6 mmol/L), pre-diabetes
+    (5.7-6.8), diabetes (\>7)
+
+-   fasting triglycerides: normal (\<150), high (200-500)
+
+## Cloz and Nor-Cloz levels (CLZ groups only) {.tabset}
+
+-   P039 and P046 don't have these measures (CR)
+
+### Cloz levels 
+
+```{r}
+# Clz w/ ggstatsplot 
+ggbetweenstats(
+  data=clinical_full,
+  x=participant_group,
+  y=cloz_level)
+
+
+# Plot cloz level
+cloz_level<-ggplot(subset(clinical_full, clz %in% "clz"), aes(x=participant_group, y=cloz_level, fill=participant_group)) +
+  geom_violin(outlier.shape = NA) + 
+  geom_jitter(width = 0.1) + 
+  labs(title="Cloz level", x="Groups", y="cloz_leve", legend="Groups")  + 
+   # theme(legend.position="none")
+  theme(plot.title = element_text(hjust = 0.5)) + # centre title 
+   scale_fill_discrete(name="Participant Group") # rename legend title
+cloz_level
+```
+
+### Cloz/norcloz ratio
+
+```{r}
+
+#Cloz_norcloz 
+group_by(clinical_full, participant_group) %>%
+  drop_na(cloz_level) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(cloz_level),
+    sd = sd(cloz_level)
+  )
+#Cloz_norcloz 
+group_by(clinical_full, participant_group) %>%
+  drop_na(cloz_norcloz_ratio) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(cloz_norcloz_ratio),
+    sd = sd(cloz_norcloz_ratio)
+  )
+
+# Plot cloz/norcloz ratio
+cloz_norcloz_ratio<-ggplot(subset(clinical_full, clz %in% "clz"), aes(x=participant_group, y=cloz_norcloz_ratio, na.rm=TRUE, fill=participant_group)) +
+  geom_violin(outlier.shape = NA) + 
+  geom_jitter(width = 0.1) + 
+  labs(title="Cloz/noncloz ratio", x="Groups", y="cloz_norcloz_ratio", legend="Groups")  + 
+   # theme(legend.position="none")
+  theme(plot.title = element_text(hjust = 0.5)) + # centre title 
+   scale_fill_discrete(name="Participant Group") # rename legend title
+cloz_norcloz_ratio
+
+```
+
+# Dietary PCs and arfs
+
+-   PC1 (18%): high on snacks, confectionary and baked prodcuts; low on
+    meat, veg, grains and takeaway
+-   PC2 (15%): low on veg, alternative and condiments; high on grains
+    and dairy
+-   PC3 (12%): low on fruit and laternative meats; high on fatty meats
+-   PC4 (11%): low on baked products and fatty meats, high on sweet
+    drinks and snacks
+-   PC1-PC4 have been transformed with INT 
+
+## PC1 {.tabset}
+
+-   data is not normally distributed
+-   no sig. differences between groups
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=PC1, group=participant_group, color=participant_group)) +
+  geom_density() 
+
+ggplot(clinical_full, aes (x=PC1)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$PC1)
+range(clinical_full$PC1)
+ggqqplot(clinical_full$PC1) # not normal
+shapiro.test(clinical_full$PC1) # not normal
+
+# Rank-based inverse normal transformation (INT)
+clinical_full$PC1_int<-RankNorm(clinical_full$PC1)
+ggqqplot(clinical_full$PC1_int) # normal
+
+```
+
+### PC1_int (4 groups)
+```{r}
+PC1_int_1<-ggplot(data=clinical_full, aes(x=PC1_int, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$PC1_int)
+PC1_int_1
+```
+
+### PC1_int (NC vs SCZ)
+- no difference
+```{r}
+PC1_int_2<-ggplot(data=clinical_full, aes(x=PC1_int, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(PC1_int[scz == "scz"])) # normally distributed
+  with(clinical_full, shapiro.test(PC1_int[scz == "nc"])) # normally distributed
+  # Check equal variances assumed (F-test)
+  var.test(PC1_int ~ scz, data = clinical_full)
+  # t-test
+  t.test(PC1_int ~ scz, data = clinical_full, var.equal=TRUE)
+```
+
+### PC1_int (AAP vs CLZ)
+- no difference
+```{r}
+PC1_int_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=PC1_int, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC1_int[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC1_int[clz == "no_clz"])) 
+  # Check equal variances assumed (F-test)
+  var.test(PC1_int ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(PC1_int ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal=FALSE) 
+```
+
+### PC1_int (CR vs CNR)
+-No difference
+```{r}
+PC1_int_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=PC1_int, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC1_int[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC1_int[participant_group == "CNR"]))
+  # Check equal variances assumed (F-test)
+  var.test(PC1_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # t-test
+  t.test(PC1_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal=TRUE)
+```
+
+### Plots
+```{r}
+plot_grid(PC1_int_1,PC1_int_2,PC1_int_3,PC1_int_4)
+```
+
+## PC2 {.tabset}
+
+-   not normally distributed
+-   diff. for NC vs SCZ (p=0.001)
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=PC2)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$PC2)
+range(clinical_full$PC2)
+ggqqplot(clinical_full$PC2) # not normal
+shapiro.test(clinical_full$PC2) # not normal
+
+# Rank-based inverse normal transformation (INT)
+clinical_full$PC2_int<-RankNorm(clinical_full$PC2)
+ggqqplot(clinical_full$PC2_int) # normal
+```
+
+### PC2_int (4 groups)
+```{r}
+PC2_int_1<-ggplot(data=clinical_full, aes(x=PC2_int, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+```
+
+### PC2_int (NC vs SCZ)
+-difference
+```{r}
+PC2_int_2<-ggplot(data=clinical_full, aes(x=PC2_int, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(PC2_int[scz == "scz"])) 
+  with(clinical_full, shapiro.test(PC2_int[scz == "nc"]))
+  # Check equal variances assumed (F-test)
+  var.test(PC2_int ~ scz, data = clinical_full)
+  # T-test
+  t.test(PC2_int ~ scz, data = clinical_full, var.equal=TRUE)
+```
+
+### PC2_int (AAP vs CLZ)
+```{r}
+PC2_int_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=PC2_int, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC2_int[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC2_int[clz == "no_clz"])) 
+  # Check equal variances assumed (F-test)
+  var.test(PC2_int ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # t-test
+  t.test(PC2_int ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal=TRUE)
+```
+
+### PC2_int (CR vs CNR)
+```{r}
+PC2_int_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=PC2_int, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC2_int[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC2_int[participant_group == "CNR"]))
+  # Check equal variances assumed (F-test)
+  var.test(PC2_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(PC2_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal=TRUE)
+```
+
+### Plots
+```{r}
+plot_grid(PC2_int_1,PC2_int_2,PC2_int_3,PC2_int_4)
+```
+
+## PC3 {.tabset}
+
+-   not normal
+-   small difference between NC and SCZ (p=.05)
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=PC3)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$PC3)
+range(clinical_full$PC3)
+ggqqplot(clinical_full$PC3) # not normal
+shapiro.test(clinical_full$PC3) # not normal
+
+# Rank-based inverse normal transformation (INT)
+clinical_full$PC3_int<-RankNorm(clinical_full$PC3)
+ggqqplot(clinical_full$PC3_int) # normal
+```
+
+### PC3_int (4 groups)
+```{r}
+PC3_int_1<-ggplot(data=clinical_full, aes(x=PC3_int, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+```
+
+### PC3_int (NC vs SCZ)
+```{r}
+PC3_int_2<-ggplot(data=clinical_full, aes(x=PC3_int, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(PC3_int[scz == "scz"])) 
+  with(clinical_full, shapiro.test(PC3_int[scz == "nc"])) # normal
+  # Check equal variances assumed (F-test)
+  var.test(PC3_int ~ scz, data = clinical_full)
+  # T-test
+  t.test(PC3_int ~ scz, data = clinical_full, var.equal=TRUE)
+```
+
+### PC3_int (AAP vs CLZ)
+```{r}
+PC3_int_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=PC3_int, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC3_int[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC3_int[clz == "no_clz"]))
+  # Check equal variances assumed (F-test)
+  var.test(PC3_int ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(PC3_int ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal=TRUE)
+```
+
+### PC3_int (CR vs CNR)
+```{r}
+PC3_int_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=PC3_int, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC3_int[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC3_int[participant_group == "CNR"]))
+  # Check equal variances assumed (F-test)
+  var.test(PC3_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(PC3_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots
+```{r}
+plot_grid(PC3_int_1,PC3_int_2,PC3_int_3,PC3_int_4)
+```
+
+## PC4 {.tabset}
+ 
+-   data is normally distributed
+-   no sig. differences
+
+### Density plot of all data and skewness
+```{r}
+ggplot(clinical_full, aes (x=PC4)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$PC4)
+range(clinical_full$PC4)
+ggqqplot(clinical_full$PC4) # close to normal
+shapiro.test(clinical_full$PC4) # normal
+
+# Rank-based inverse normal transformation (INT)
+clinical_full$PC4_int<-RankNorm(clinical_full$PC4)
+ggqqplot(clinical_full$PC4_int) # normal
+```
+
+### PC4_int (4 groups)
+```{r}
+PC4_int_1<-ggplot(data=clinical_full, aes(x=PC4_int, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+```
+
+### PC4_int (NC vs SCZ)
+```{r}
+PC4_int_2<-ggplot(data=clinical_full, aes(x=PC4_int, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(PC4_int[scz == "scz"])) 
+  with(clinical_full, shapiro.test(PC4_int[scz == "nc"])) 
+  # Check equal variances assumed (F-test)
+  var.test(PC4_int ~ scz, data = clinical_full)
+  # T-test
+  t.test(PC4_int ~ scz, data = clinical_full, var.equal = TRUE)
+```
+
+### PC4_int (AAP vs CLZ)
+```{r}
+PC4_int_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=PC4_int, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC4_int[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(PC4_int[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(PC4_int ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(PC4_int ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal = TRUE) 
+```
+
+### PC4_int (CR vs CNR)
+```{r}
+PC4_int_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=PC4_int, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC4_int[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(PC4_int[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(PC4_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # Welsch-test
+  t.test(PC4_int ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots
+```{r}
+plot_grid(PC4_int_1,PC4_int_2,PC4_int_3,PC4_int_4)
+```
+
+## ARFS {.tabset}
+
+-   normally distributed
+-   differences between NC vs SCZ;
+-   no diff. for the other groups
+
+### ARFS (4 groups)- density plot (score 0-74)
+```{r}
+arfs_1<-ggplot(data=clinical_full, aes(x=arfs, group=participant_group,fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60","#21DAC9", "#FFC107", "#3A9A8A")) +
+    labs(fill="Groups")
+range(clinical_full$arfs)
+ggqqplot(clinical_full$arfs) # normal
+shapiro.test(clinical_full$arfs) # normal
+```
+
+### ARFS (NC vs SCZ)
+```{r}
+arfs_2<-ggplot(data=clinical_full, aes(x=arfs, group=scz, fill=scz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#D81B60", "#E8913C"), name = "NC and SCZ", labels = c("NC", "SCZ"))  
+  # Check normality (Shapiro test)
+  with(clinical_full, shapiro.test(arfs[scz == "scz"])) 
+  with(clinical_full, shapiro.test(arfs[scz == "nc"])) 
+  # Check equal variances assumed (F-test)
+  var.test(arfs ~ scz, data = clinical_full)
+  # T-test
+  t.test(arfs ~ scz, data = clinical_full, var.equal = TRUE)
+```  
+
+### ARFS (AAP vs CLZ)
+```{r}
+arfs_3<-ggplot(data=subset(clinical_full, scz %in% "scz"), aes(x=arfs, group=clz, fill=clz)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#21DAC9", "#102C8E"), name = "People with SCZ", labels = c("AAP", "CLZ"))
+  # Check normality
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(arfs[clz == "clz"])) 
+  with(subset(clinical_full, scz %in% "scz"), shapiro.test(arfs[clz == "no_clz"])) 
+  # Check equal variances assumed
+  var.test(arfs ~ clz, data = subset(clinical_full, scz %in% "scz"))
+  # T-test
+  t.test(arfs ~ clz, data = subset(clinical_full, scz %in% "scz"), var.equal = TRUE) # p=0.01
+```
+
+### ARFS (CR vs CNR)
+```{r}
+arfs_4<-ggplot(data=subset(clinical_full, clz %in% "clz"), aes(x=arfs, group=participant_group, fill=participant_group)) +
+    geom_density(adjust=1.5, alpha=.4) +
+    scale_fill_manual(values=c("#FFC107", "#3A9A8A"), name = "CLZ users", labels = c("CR", "CNR"))
+  # Check normality
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(arfs[participant_group == "CR"])) 
+  with(subset(clinical_full, clz %in% "clz"), shapiro.test(arfs[participant_group == "CNR"]))
+  # Check equal variances assumed
+  var.test(arfs ~ participant_group, data = subset(clinical_full, clz %in% "clz"))
+  # T-test
+  t.test(arfs ~ participant_group, data = subset(clinical_full, clz %in% "clz"), var.equal = TRUE)
+```
+
+### Plots
+```{r}
+plot_grid(arfs_1,arfs_2,arfs_3,arfs_4)
+
+```
+
+# Transformation of non-parametric data
+
+-   guide
+    [<https://www.datanovia.com/en/lessons/transform-data-to-normal-distribution-in-r/>]
+
+## BMI
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=bmi)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$bmi) # data is positively skewed --> log transformation, however skewness is relatively small, so could leave like this?
+```
+
+## Sagis total burden
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=sagis_total_burden)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+
+skewness(clinical_full$sagis_total_burden) # data is positively skewed --> log transformation
+
+```
+
+## Sagis constipation
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=sagis_constipation)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+
+skewness(clinical_full$sagis_constipation) # data is positively skewed --> log transformation
+```
+
+## Sagis diarrhea discomfort
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=sagis_diarrhea_discomfort)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+
+skewness(clinical_full$sagis_diarrhea_discomfort) # data is positively skewed --> log transformation
+```
+
+## IPAQ 
+-  short form
+-   [https://robjhyndman.com/hyndsight/transformations]
+-   need to find a transformation which works with 0s
+- outliers: z score>3
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=ipaq_met)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+
+skewness(clinical_full$ipaq_met) # data is positively skewed --> log transformation
+
+# Plot bmi and ipaq_met per pacat
+ggplot(clinical_full, aes(x=ipaq_met, y=bmi, color=ipaq_pacat)) +
+  geom_point(size=2) # data seems strange -> outliers?
+
+# Plot bmi and ipaq_met per group
+ggplot(clinical_full, aes(x=ipaq_met, y=bmi, color=participant_group)) +
+  geom_point(size=2) # data seems strange -> outliers?
+
+# Check ipaq_pacat per group
+ggplot(clinical_full, aes(x = participant_group, fill = ipaq_pacat)) + 
+  geom_bar()
+
+# Identifying outliers (z-score)
+y<-clinical_full %>% 
+  mutate(zscore = (ipaq_met - mean(ipaq_met))/sd(ipaq_met))
+ggplot(y, aes (x=zscore)) +
+  geom_density()
+
+
+# transformation
+clinical_full_transformed<-clinical_full # create a new file
+clinical_full_transformed$sagis_total_burden<-log10(clinical_full_transformed$sagis_total_burden)
+
+```
+
+## Hba1c
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=hba1c)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$hba1c, na.rm=TRUE) # data is positively skewed --> log transformation
+
+# transformation
+clinical_full_transformed<-clinical_full
+clinical_full_transformed$hba1c<-log10(clinical_full_transformed$hba1c)
+
+# Density plot of all data after transformation
+ggplot(clinical_full_transformed, aes (x=hba1c)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full_transformed$hba1c, na.rm=TRUE) # data is positively skewed --> log transformation
+```
+
+## Fasting glucose
+
+```{r}
+# Density plot of all data
+ggplot(clinical_full, aes (x=fasting_glucose)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full$fasting_glucose, na.rm=TRUE) # data is positively skewed --> log transformation
+
+
+clinical_full_transformed$fasting_glucose<-log10(clinical_full_transformed$fasting_glucose)
+
+# Density plot of all data after transformation
+ggplot(clinical_full_transformed, aes (x=fasting_glucose)) +
+  geom_density() +
+  stat_overlay_normal_density(color = "red", linetype = "dashed")
+skewness(clinical_full_transformed$fasting_glucose, na.rm=TRUE) # data is positively skewed --> log transformation
+```
+
+
+*Save progress*
+
+```{r}
+
+# Save document with INTs abd bmi_cat
+write.csv(clinical_full, "C:/Users/uqsvasil/Documents/PhD/TRS-BIOME/Data/trs_biome_full_clinical_ipaq_sagis_scfa_dates_arfs_pe13_pcs_int.csv", row.names = F, quote = F)
+
+
+save.image("analysis_trs_21.07.22.Rdata")
+load("analysis_trs_21.07.22.Rdata")
+
+```
