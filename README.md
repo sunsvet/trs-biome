@@ -11,7 +11,7 @@ by Vasileva et al., 2024 (doi:10.1001/jamapsychiatry.2023.5371)
 * profiles_taxa_counts.tsv - count dataframe for taxonomical data at the species level
 
 ## Scripts:
-* trs_biome_1_clean_clinical_aes.Rmd - cleaning clinical data (metadata)
+* trs_biome_1_clean_clinical_aes.Rmd - cleaning clinical data (metadata) including obtaining dietary PCs from AES
 * trs_biome_2_clinical_analysis.Rmd - exploring clinical data
 * trs_biome_metagenomics_analysis_osca_prep.Rmd - extracting data for OSCA analyses
 * trs_biome_osca_forest_plots.Rmd - creating forest plots for OSCA results
