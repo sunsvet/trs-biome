@@ -2,7 +2,7 @@
 
 # What's here?
 Here you can find data and code related to the paper 
-"Associations of the Gut Microbiome With Treatment Resistance in Schizophrenia" 
+[Associations of the Gut Microbiome With Treatment Resistance in Schizophrenia](https://jamanetwork.com/journals/jamapsychiatry/article-abstract/2814638)
 by Vasileva et al., 2024 (doi:10.1001/jamapsychiatry.2023.5371) 
 
 ## Files: 
