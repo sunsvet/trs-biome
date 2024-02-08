@@ -17,4 +17,6 @@ by [Vasileva et al.](https://jamanetwork.com/journals/jamapsychiatry/article-abs
 * trs_biome_metagenomics_analysis_osca_prep.Rmd - extracting data for OSCA analyses
 * trs_biome_osca_forest_plots.Rmd - creating forest plots for OSCA results
 
+Please, if you are using our data, let us know and cite our paper. 
+
 *This folder will be updated shortly with complete (and tidier) scripts for analyses and dataframes.*
